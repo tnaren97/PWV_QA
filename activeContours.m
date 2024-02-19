@@ -6,7 +6,7 @@
 %                - [scan num].[name]_[mode]_BH_[scan type]AbdAo
 %                   - .tgz file or DICOMS
 % Select patient folder directory
-
+clear all
 %home_dir = 'C:\Users\naren\Desktop\Aorta_Segmentation\';
 home_dir = 'D:\PWV\PWV_data\life_life00030_11178_2020-09-14-h08\dicoms';
 cd(home_dir)
@@ -47,7 +47,7 @@ else
     load('bssfp_info.mat');
     load('bssfp_times.mat');
 end 
-
+%     disp(bssfp_times)
 bssfpFrames = bssfp_info.CardiacNumberOfImages;
 bssfpSize = double(bssfp_info.Height); %assumes matrix size is equal in x and y
 cropSize = 256; %BASED ON CROP SIZES BELOW (currently 256x256 to better visualize aorta)
@@ -69,6 +69,7 @@ if contains(bssfp_folder,'AAo','IgnoreCase',true)
     end
     % adjustable parameters
     crop = [155 410 101 356]; %crop dims (1:2 = row width, 3:4 = col width)
+%     crop = [105 105+cropSize-1 131 131+cropSize-1];
     radrange = [13 40]; %radius range for Hough Transform
     sens = 0.90; %sensitivity of circle find
 else
@@ -119,6 +120,15 @@ if needsMask %if we haven't loaded in the mask...
         %% Active Contours + Dilation
         BW = activecontour(image,BW,300,'Chan-Vese','SmoothFactor',5,'ContractionBias',0.2);
         BW = imdilate(BW,strel('disk',2));
+        if ~nnz(BW)
+            circ1 = circleROI(param1(1), param1(2), param1(3), cropSize);
+            circ2 = circleROI(param2(1), param2(2), param2(3), cropSize);
+            BW = circ1 + circ2;
+        elseif sum(BW, 'all') < 1000
+            circ1 = circleROI(param1(1), param1(2), param1(3), cropSize);
+            circ2 = circleROI(param2(1), param2(2), param2(3), cropSize);
+            BW = circ1 + circ2;
+        end
 
         %% Freehand ROI conversion
         blocations = bwboundaries(BW,'noholes');
@@ -237,6 +247,8 @@ end
 pc = pcmr(:,:,1:pcFrames);
 mag = pcmr(:,:,(pcFrames+1):end);
 pcmr_times = pcmr_times(1:pcFrames);
+% disp(pcmr_times)
+% disp(bssfp_times)
 save('pc.mat','pc');
 save('mag.mat','mag');
 save('pcmr_times.mat','pcmr_times');
@@ -248,6 +260,7 @@ bssfp = imresize3(bssfp,[desiredSize desiredSize desiredFrames]);
 pc  = imresize3(pc,[desiredSize desiredSize desiredFrames]);
 mag = imresize3(mag,[desiredSize desiredSize desiredFrames]);
 masks = imresize3(masks,[desiredSize desiredSize desiredFrames]);
+% masks = imtranslate(masks, [25, -11]);
 pcmr_times = interp1((1:pcFrames),pcmr_times,linspace(1,pcFrames,desiredFrames),'linear');
 bssfp_times = interp1((1:bssfpFrames),bssfp_times,linspace(1,bssfpFrames,desiredFrames),'linear');
 
@@ -300,6 +313,11 @@ if ~exist('PWV_QA_Analysis','dir')
     mkdir('PWV_QA_Analysis');
 end 
 cd('PWV_QA_Analysis');
+AscAo_flow = smoothdata(AscAo_flow,'gaussian',4);
+% AscAo_area = smoothdata(AscAo_area,'gaussian',4);
+AscAo_flow = circshift(AscAo_flow,7);
+AscAo_area = circshift(AscAo_area,7);
+tz = circshift(pcmr_times,7);
 
 if numROIs==2
     save('AscAo_flow.mat','AscAo_flow');
@@ -335,12 +353,19 @@ if numROIs==2
 %     free2 = drawfreehand;
 %     early_sys = inpolygon(AscAo_area(systole),AscAo_flow(systole),free2.Position(:,1),free2.Position(:,2));
     figure; 
-    scatter([AscAo_area_int(3*end/4+1:end) AscAo_area_int(1:end/4)], [AscAo_flow(3*end/4+1:end) AscAo_flow(1:end/4)],[], linspace(1,length(AscAo_area)/2,length(AscAo_area)/2))
+    % scatter([AscAo_area_int(3*end/4+1:end) AscAo_area_int(1:end/4)], [AscAo_flow(3*end/4+1:end) AscAo_flow(1:end/4)],[], linspace(1,length(AscAo_area)/2,length(AscAo_area)/2))
+    %  scatter(AscAo_area_int, AscAo_flow,[], tz)
     colormap jet
     % colorbar
-    title('Ascending Aorta - QA'); 
-    xlabel('Area (cm^2)'); 
-    ylabel('Flow (cm^3/s)');
+    scatter(AscAo_area_int(1:40), AscAo_flow(1:40),[], pcmr_times(1:40))
+    ax = gca;
+    ax.FontSize = 17; 
+    c = colorbar;
+    c.Label.String = 'Time (ms)';
+    c.FontSize = 20;
+    title('Ascending Aorta - QA Plot','FontSize',42);  
+    xlabel('Area (cm^2)','FontSize',20);
+    ylabel('Flow (mL/s)','FontSize',20);
     systolePts = [AscAo_area_int(asystole); AscAo_flow(asystole)]';
     [coef,stats] = polyfit(systolePts(:,1),systolePts(:,2),1);
     minArea = min(systolePts(:,1));
@@ -350,8 +375,12 @@ if numROIs==2
     delete(free1)
     hold on; 
     scatter(systolePts(:,1),systolePts(:,2),72,'k','x');
-    plot(xq,yq); 
-    str = ['Slope = ' num2str(coef(1)) '\newlineIntcpt = ' num2str(coef(2))];
+    plot(xq,yq,'k','LineWidth',1.4); 
+    % str = ['Slope = ' num2str(coef(1)) '\newlineIntcpt = ' num2str(coef(2))];
+    str = ['Slope = ' num2str(coef(1))];
+%     '\newlineIntcpt = ' num2str(coef(2))
+%     text(min(AscAo_area_int)+0.1,max(AscAo_flow)+0.1,str);
+    
     text(min(xq),max(yq)-0.1*max(yq),str);
     hold off;
     AscAo_PWV = coef(1);
@@ -454,7 +483,8 @@ else
     scatter(systolePts(:,1),systolePts(:,2),72,'k','x');
     plot(xq,yq); 
     str = ['Slope = ' num2str(coef(1)) '\newlineIntcpt = ' num2str(coef(2))];
-    text(max(AbdAo_area_int)+0.1,max(AbdAo_flow)+0.1,str);
+    % text(max(AbdAo_area_int)+0.1,max(AbdAo_flow)+0.1,str);
+    text(min(AbdAo_area_int)+0.1,max(AbdAo_flow)+0.1,str);
     hold off;
     AbdAo_PWV = coef(1);
     disp(['PWV_QA = ' num2str(coef(1)*0.01) ' m/s']);
@@ -486,4 +516,8 @@ function clickCallback(~,evt)
     if strcmp(evt.SelectionType,'double')
         uiresume;
     end
+end
+function circ = circleROI(x,y,r,imgSize)
+    [xx,yy] = ndgrid((1:imgSize)-y,(1:imgSize)-x);
+    circ = (xx.^2 + yy.^2)<r^2;
 end
