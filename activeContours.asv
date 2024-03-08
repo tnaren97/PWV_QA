@@ -75,7 +75,6 @@ end
 
 
 %% Segment Each Frame Separately
-cropSize = 256;
 if needsMask %if we haven't loaded in the mask...
     if numROIs == 2
         AscAo_mask = zeros(cropSize,cropSize,bssfpFrames);
@@ -85,10 +84,10 @@ if needsMask %if we haven't loaded in the mask...
     end
     f = figure;
     imshow(bssfp(:,:,1), []);
-    rectangle = drawrectangle('AspectRatio', 1);
+    rectangle = drawrectangle();
     rec_pos = rectangle.Position;
     crop = int32([rec_pos(2) rec_pos(2)+rec_pos(4) rec_pos(1) rec_pos(1)+rec_pos(3)]); %crop dims (1:2 = row width, 3:4 = col width)
-    cropSize = rec_pos(3); 
+    cropSize = 256; 
     close(f)
 
     radrange = [10 30]; % radius range for Hough Transform
@@ -546,7 +545,6 @@ function clickCallback(~,evt)
         uiresume;
     end
 end
-
 function circ = circleROI(x,y,r,imgSize)
     [xx,yy] = ndgrid((1:imgSize)-y,(1:imgSize)-x);
     circ = (xx.^2 + yy.^2)<r^2;

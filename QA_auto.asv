@@ -1,22 +1,22 @@
 clear all; close all; clc;
 
-options = {'kmeans','otsu','circle+contours','hough','hough+contours','edge+hough+contours'};
-[choice, tf] = listdlg('ListString', options, 'InitialValue', 5, 'PromptString', "Choose a segmentation method", 'SelectionMode', 'single');
-segType = options{choice};
+% options = {'kmeans','otsu','circle+contours','hough','hough+contours','edge+hough+contours'};
+% [choice, tf] = listdlg("Choose a segmentation method", options, 'InitialValue', 5);
+% segType = options{choice};
+% 
+% plane = inputdlg("Type in image plane name");
+% plane = plane{1};
+% 
+% num_roi = inputdlg("Type in number of ROIs in plane");
+% num_roi = str2num(num_roi{1});
 
-plane = inputdlg("Type in image plane name");
-plane = plane{1};
-
-num_roi = inputdlg("Type in number of ROIs in plane");
-num_roi = str2num(num_roi{1});
-
-% plane = 'asc';
-% segType = 'hough+contours';
-% num_roi = 2;
+plane = 'asc';
+segType = 'hough+contours';
+num_roi = 2;
 
 date = string(datetime('now', 'Format', 'yyyy-MM-dd-HHmm'));
-save_loc = uigetdir(pwd, "Choose where to save analysis data");
-% save_loc = 'D:\PWV\vol_Tarun';
+% save_loc = uigetdir(pwd, "Choose where to save analysis data");
+save_loc = 'D:\PWV\vol_Tarun';
 disp("Created analysis folder")
 cd(save_loc)
 result_dir = fullfile(save_loc, '2DPC_QA_Analysis');
@@ -26,8 +26,8 @@ end
 analysis_dir = fullfile(result_dir, plane, strcat(segType, '_', date));
 
 %% Load BSSFP
-bssfp_folder = uigetdir(pwd, 'Select bSSFP Scan');
-% bssfp_folder = 'D:\PWV\vol_Tarun\standard\015_FIESTA_Cine_BH_AAo_NOPROSP_14VPS_30FRAMES';
+% bssfp_folder = uigetdir(pwd, 'Select bSSFP Scan');
+bssfp_folder = 'D:\PWV\vol_Tarun\standard\015_FIESTA_Cine_BH_AAo_NOPROSP_14VPS_30FRAMES';
 disp("Loading bSSFP data...")
 bssfp_data_folder = fullfile(result_dir, plane, 'bssfp');
 if ~exist(bssfp_data_folder,'dir')
@@ -69,6 +69,65 @@ bssfpSize = double(bssfpInfo.Height); %assumes matrix size is equal in x and y
 bssfpFrames = bssfpInfo.CardiacNumberOfImages;
 pixelArea = bssfpInfo.PixelSpacing(1).*bssfpInfo.PixelSpacing(2)*0.01; %cm^2
 
+%% Load 2DPC
+% pc_folder = uigetdir(pwd,'Select folder 2DPC scan');
+pc_folder = 'D:\PWV\vol_Tarun\standard\008_PWV_CartBH_AAo_NOPROSP_4VPS_40FRAMES';
+disp("Loading 2DPC data...")
+pc_data_folder = fullfile(result_dir, plane, 'pc');
+if ~exist(pc_data_folder,'dir')
+    mkdir(pc_data_folder);
+end
+if ~exist(fullfile(pc_data_folder, 'pc.mat'),'file')
+    dirFiles = dir(fullfile(pc_folder, '*.dcm'));
+    if isempty(dirFiles) %check if dicoms are zipped
+        zipFiles = dir(fullfile(pc_folder, '*.tgz'));
+        if isempty(zipFiles)
+            disp('NO READABLE DICOMS OR TGZ FILE FOUND, TRY ANOTHER FOLDER');
+        else
+            gunzip(fullfile(pc_folder, '*.tgz'), 'Dicoms'); %unzip first
+            dd = dir(fullfile(pc_folder, 'Dicoms')); %get the name of the only file in the new dir
+            untar(dd(3).name,'Dicoms'); %untar that file
+            movefile(fullfile(bssfp_folder, 'Dicoms/*'), bssfp_folder); %move unzipped files back up
+            rmdir(fullfile(bssfp_folder, 'Dicoms'),'s') %get rid of created dummy unzipping folder
+        end 
+    end 
+    
+    pcInfo = dicominfo(fullfile(dirFiles(1).folder, dirFiles(1).name)); %grab dicom info from 1st frame
+    pcSize = double(pcInfo.Height); %assumes matrix size is equal in x and y
+    pcFrames = pcInfo.CardiacNumberOfImages;
+    pcmr = zeros(pcSize,pcSize,pcFrames);
+    for f=1:length(dirFiles)
+        pcmr(:,:,f) = dicomread(fullfile(dirFiles(f).folder, dirFiles(f).name));
+        temp = dicominfo(fullfile(dirFiles(f).folder, dirFiles(f).name));
+        pcmrTimes(f) = temp.TriggerTime;
+    end
+    pc = pcmr(:,:,1:pcFrames);
+    mag = pcmr(:,:,(pcFrames+1):end);
+    pcmrTimes = pcmrTimes(1:pcFrames);
+    save(fullfile(pc_data_folder, 'pc.mat'), 'pc');
+    save(fullfile(pc_data_folder, 'mag.mat'), 'mag');
+    save(fullfile(pc_data_folder, 'pcmrTimes.mat'), 'pcmrTimes');
+    save(fullfile(pc_data_folder, 'pcInfo.mat'), 'pcInfo');
+else
+    load(fullfile(pc_data_folder, 'pc.mat'));
+    load(fullfile(pc_data_folder, 'mag.mat'));
+    load(fullfile(pc_data_folder, 'pcmrTimes.mat'))
+    load(fullfile(pc_data_folder, 'pcInfo.mat'));
+end 
+pcSize = double(pcInfo.Height); %assumes matrix size is equal in x and y
+pcFrames = pcInfo.CardiacNumberOfImages;
+
+
+%% Make temporal resolutions equivalent
+% desiredSize = max(bssfpSize,pcSize);
+% desiredFrames = max(bssfpFrames,pcFrames);
+desiredSize = bssfpSize;
+desiredFrames = bssfpFrames;
+
+%% Shift the data due to periph. gating lag + prosp. gating lags
+%bssfp = circshift(bssfp,15,3);
+%pc = circshift(pc,15,3);
+%mag = circshift(mag,15,3);
 tavg_bssfp = mean(bssfp, 3);
 
 %% Initialize Masks
@@ -90,7 +149,7 @@ switch answer
         figure; imshow(tavg_bssfp,[]); title('ZOOM');
         rect = drawrectangle;
         crop = round([rect.Position(2), rect.Position(2)+rect.Position(4), rect.Position(1), rect.Position(1)+rect.Position(3)]);
-        save(fullfile(bssfp_data_folder, 'crop.mat'), 'crop')
+        save(fullfile(analysis_dir, 'crop.mat'), 'crop')
         close all;
 
         mask = zeros(num_roi, bssfpSize, bssfpSize, bssfpFrames);
@@ -128,9 +187,9 @@ if needsMask % if we haven't loaded in the mask...
                 % level = graythresh(image);
                 % BW = imbinarize(image,level);
             case 'hough' % Hough Transform
-                [BW, centers, radii, radrange, sens] = circleFinder(image, num_roi, radrange, sens);
+                [BW, centers, radii] = circleFinder(image, num_roi);
             case 'hough+contours' % Hough Transform + Active Countours
-                [BW, centers, radii, radrange, sens] = circleFinder(image, num_roi, radrange, sens);
+                [BW, centers, radii] = circleFinder(image, num_roi);
                 BW = imdilate(BW,strel('disk',2)); %dilate so active contours pulls in segmentation
                 iters = 300;
                 smF = 5;
@@ -140,7 +199,7 @@ if needsMask % if we haven't loaded in the mask...
                 BW = imdilate(BW,strel('disk',1));
             case 'edge+hough+contours' % Hough Transform + Active Countours
                 grad = rescale(imgradient(image));
-                [BW, centers, radii, radrange, sens] = circleFinder(image, num_roi, radrange, sens);
+                [BW, centers, radii] = circleFinder(image, num_roi);
                 BW = imerode(BW,strel('disk',2)); %erode so active contours pushes out
                 iters = 300;
                 smF = 5;
@@ -216,85 +275,28 @@ if needsMask % if we haven't loaded in the mask...
         end
         close all
     end
-    save(fullfile(bssfp_data_folder, 'masks.mat'), 'mask');
-    save(fullfile(bssfp_data_folder, 'areas.mat'), 'area');
+    save(fullfile(analysis_dir, 'masks.mat'), 'mask');
+    save(fullfile(analysis_dir, 'areas.mat'), 'area');
     disp('Mask and Area Data Saved');
 end
 
-%% Load 2DPC
-pc_folder = uigetdir(pwd,'Select folder 2DPC scan');
-% pc_folder = 'D:\PWV\vol_Tarun\standard\008_PWV_CartBH_AAo_NOPROSP_4VPS_40FRAMES';
-disp("Loading 2DPC data...")
-pc_data_folder = fullfile(result_dir, plane, 'pc');
-if ~exist(pc_data_folder,'dir')
-    mkdir(pc_data_folder);
-end
-if ~exist(fullfile(pc_data_folder, 'pc.mat'),'file')
-    dirFiles = dir(fullfile(pc_folder, '*.dcm'));
-    if isempty(dirFiles) %check if dicoms are zipped
-        zipFiles = dir(fullfile(pc_folder, '*.tgz'));
-        if isempty(zipFiles)
-            disp('NO READABLE DICOMS OR TGZ FILE FOUND, TRY ANOTHER FOLDER');
-        else
-            gunzip(fullfile(pc_folder, '*.tgz'), 'Dicoms'); %unzip first
-            dd = dir(fullfile(pc_folder, 'Dicoms')); %get the name of the only file in the new dir
-            untar(dd(3).name,'Dicoms'); %untar that file
-            movefile(fullfile(bssfp_folder, 'Dicoms/*'), bssfp_folder); %move unzipped files back up
-            rmdir(fullfile(bssfp_folder, 'Dicoms'),'s') %get rid of created dummy unzipping folder
-        end 
-    end 
-    
-    pcInfo = dicominfo(fullfile(dirFiles(1).folder, dirFiles(1).name)); %grab dicom info from 1st frame
-    pcSize = double(pcInfo.Height); %assumes matrix size is equal in x and y
-    pcFrames = pcInfo.CardiacNumberOfImages;
-    pcmr = zeros(pcSize,pcSize,pcFrames);
-    for f=1:length(dirFiles)
-        pcmr(:,:,f) = dicomread(fullfile(dirFiles(f).folder, dirFiles(f).name));
-        temp = dicominfo(fullfile(dirFiles(f).folder, dirFiles(f).name));
-        pcmrTimes(f) = temp.TriggerTime;
-    end
-    pc = pcmr(:,:,1:pcFrames);
-    mag = pcmr(:,:,(pcFrames+1):end);
-    pcmrTimes = pcmrTimes(1:pcFrames);
-    save(fullfile(pc_data_folder, 'pc.mat'), 'pc');
-    save(fullfile(pc_data_folder, 'mag.mat'), 'mag');
-    save(fullfile(pc_data_folder, 'pcmrTimes.mat'), 'pcmrTimes');
-    save(fullfile(pc_data_folder, 'pcInfo.mat'), 'pcInfo');
-else
-    load(fullfile(pc_data_folder, 'pc.mat'));
-    load(fullfile(pc_data_folder, 'mag.mat'));
-    load(fullfile(pc_data_folder, 'pcmrTimes.mat'))
-    load(fullfile(pc_data_folder, 'pcInfo.mat'));
-end 
-pcSize = double(pcInfo.Height); %assumes matrix size is equal in x and y
-pcFrames = pcInfo.CardiacNumberOfImages;
-
-
-%% Make temporal resolutions equivalent
 desiredSize = max(bssfpSize, pcSize);
 desiredFrames = max(bssfpFrames, pcFrames);
 
 bssfp = imresize3(bssfp,[desiredSize desiredSize desiredFrames]);
-pc = imresize3(pc,[desiredSize desiredSize desiredFrames]);
+pc  = imresize3(pc,[desiredSize desiredSize desiredFrames]);
 mag = imresize3(mag,[desiredSize desiredSize desiredFrames]);
 temp_mask = zeros(num_roi, desiredSize, desiredSize, desiredFrames);
 temp_area = zeros(num_roi, desiredFrames);
 for i=1:num_roi
-    temp_mask(i, :,:,:) = imresize3(squeeze(mask(i, :,:,:)), [desiredSize desiredSize desiredFrames]);
-    temp_area(i, :) = interp1((1:bssfpFrames),squeeze(area(i,:)),linspace(1,bssfpFrames,desiredFrames), 'linear');
+    temp_mask(i, :,:,:) = imresize3(mask(i, :,:,:), [desiredSize desiredSize desiredFrames]);
+    temp_area(i, :) = interp1((1:bssfpFrames),areas(i,:),linspace(1,bssfpFrame,desiredFrames), 'linear');
 end
 mask = temp_mask;
 area = temp_area;
 
 pcmrTimes = interp1((1:pcFrames),pcmrTimes,linspace(1,pcFrames,desiredFrames),'linear');
 bssfpTimes = interp1((1:bssfpFrames),bssfpTimes,linspace(1,bssfpFrames,desiredFrames),'linear');
-
-
-%% Shift the data due to periph. gating lag + prosp. gating lags
-%bssfp = circshift(bssfp,15,3);
-%pc = circshift(pc,15,3);
-%mag = circshift(mag,15,3);
-
 
 %% Calculating Velocity and Flow
 for j=1:num_roi
@@ -306,7 +308,6 @@ for j=1:num_roi
         flow(j, i) = area(j, i).*meanV; %flow in frame i (cm^3/s)
     end
 end
-stroke_volume = sum(flow, 2);
 save(fullfile(analysis_dir, 'flows.mat'), 'flow');
 disp('Flow Data Saved')
 
@@ -353,8 +354,7 @@ for j=1:num_roi
     hold off;
     QAplot = gcf; 
     DescAo_PWV = coef(1);
-    fprintf('ROI %d PWV_QA = %.4f m/s\n', j, coef(1)*0.01);
-    fprintf('ROI %d Stroke Volume = %.4f mL\n', j, stroke_volume(j)*0.1)
+    sprintf('ROI %d PWV_QA = %f m/s', j, coef(1)*0.01);
     saveas(QAplot,fullfile(analysis_dir, sprintf('QAplot_ROI_%d', j)));
     save(fullfile(analysis_dir, sprintf('coef_ROI_%d.mat', j)), 'coef');
     save(fullfile(analysis_dir, sprintf('stats_ROI_%d.mat', j)), 'stats');
@@ -364,7 +364,7 @@ disp("(•_•)    ( •_•)>⌐■-■     (⌐■_■)")
 
 
 %% Helper functions
-function [BW, centers, radii, radrange, sens] = circleFinder(image, num_roi, radrange, sens)
+function [BW, centers, radii] = circleFinder(image, num_roi)
     BW = false(size(image,1),size(image,2));
     [Xgrid,Ygrid] = meshgrid(1:size(BW,2),1:size(BW,1));
     flag = 0;
