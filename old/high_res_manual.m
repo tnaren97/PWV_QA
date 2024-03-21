@@ -7,8 +7,8 @@
 %                   - .tgz file or DICOMS
 % Select patient folder directory
 clear all
-%home_dir = 'C:\Users\naren\Desktop\Aorta_Segmentation\';
-home_dir = 'D:\PWV\vol_Tarun\standard';
+home_dir = 'C:\Users\naren\Desktop\Aorta_Segmentation\';
+% home_dir = 'D:\PWV\PWV_data\life_life00030_11178_2020-09-14-h08\dicoms';
 cd(home_dir)
 
 % result_dir = [home_dir 'results\'];
@@ -41,152 +41,143 @@ if ~(exist('bssfp.mat','file')&&exist('bssfp_times.mat','file') )
         bssfp(:,:,f) = dicomread(dirFiles(f).name);
         temp = dicominfo(dirFiles(f).name);
         bssfp_times(f) = temp.TriggerTime;
-    end 
+    end
 else
     load('bssfp.mat');
     load('bssfp_info.mat');
     load('bssfp_times.mat');
-end 
+end
 %     disp(bssfp_times)
 bssfpFrames = bssfp_info.CardiacNumberOfImages;
 bssfpSize = double(bssfp_info.Height); %assumes matrix size is equal in x and y
+cropSize = 256; %BASED ON CROP SIZES BELOW (currently 256x256 to better visualize aorta)
 pixelArea = bssfp_info.PixelSpacing(1).*bssfp_info.PixelSpacing(2)*0.01; %cm^2
 
 if contains(bssfp_folder,'AAo','IgnoreCase',true)
     numROIs = 2; 
-    if ~exist('AscAo_mask.mat','file') || ~exist('DescAo_mask.mat','file')
+    if ~exist('AscAo_mask.mat','file')
         needsMask = 1;
+        AscAo_mask = zeros(cropSize,cropSize,bssfpFrames);
     else
         needsMask = 0;    
         load('AscAo_mask.mat');
+    end
+    if ~exist('DescAo_mask.mat','file')
+        DescAo_mask = zeros(cropSize,cropSize,bssfpFrames);
+    else
         load('DescAo_mask.mat');
     end
+    % adjustable parameters
+%     crop = [145 145+cropSize-1 121 121+cropSize-1];
+    crop = [105 105+cropSize-1 131 131+cropSize-1];%crop dims (1:2 = row width, 3:4 = col width)
+%     crop = [180 180+cropSize-1 190 190+cropSize-1];
+    radrange = [6 25]; %radius range for Hough Transform
+%     sens = 0.90; %sensitivity of circle find
+    sens = 0.95;
 else
     numROIs = 1;
     if ~exist('AbdAo_mask.mat','file')
         needsMask = 1;
+        AbdAo_mask = zeros(cropSize,cropSize,bssfpFrames);
     else
         needsMask = 0;
         load('AbdAo_mask.mat');
     end
+    % adjustable parameters
+    crop = [105 360 121 376]; %crop dims (1:2 = row width, 3:4 = col width)
+    radrange = [12 23]; %radius range for Hough Transform
+    sens = 0.9; %sensitivity of circle find
 end
-
-
-
 
 %% Segment Each Frame Separately
 if needsMask %if we haven't loaded in the mask...
-    if numROIs == 2
-        AscAo_mask = zeros(cropSize,cropSize,bssfpFrames);
-        DescAo_mask = zeros(cropSize,cropSize,bssfpFrames);
-    else
-        AbdAo_mask = zeros(cropSize,cropSize,bssfpFrames);
-    end
-    f = figure;
-    imshow(bssfp(:,:,1), []);
-    rectangle = drawrectangle();
-    rec_pos = rectangle.Position;
-    crop = int32([rec_pos(2) rec_pos(2)+rec_pos(4) rec_pos(1) rec_pos(1)+rec_pos(3)]); %crop dims (1:2 = row width, 3:4 = col width)
-    cropSize = 256; 
-    close(f)
-
-    radrange = [10 30]; % radius range for Hough Transform
-    sens = 0.9; % sensitivity of circle find
-    flag = 0;
-    image_test = bssfp(crop(1):crop(2),crop(3):crop(4),1); 
-    while ~flag
-        g = figure;
-        imshow(image_test, []);
-        [centers_test,radii_test,~] = imfindcircles(image_test,radrange,'ObjectPolarity','bright','Sensitivity',sens);
-        for n = 1:numROIs
-            try
-                BW = BW | (hypot(Xgrid-centers(n,1),Ygrid-centers(n,2)) <= radii(n));
-            catch error
-                continue
-            end
-        end
-        viscircles(centers_test, radii_test);
-        options.WindowStyle = 'normal';
-        answer = inputdlg({"Enter lower radius range:", "Enter upper radius range:", "Enter sensitivity:", "Accept? (enter 1)"}, ...
-            "Circle Estimation Parameters", [1 30; 1 30; 1 30; 1 30;], {num2str(radrange(1)), num2str(radrange(2)), num2str(sens), num2str(flag)}, ...
-            options);
-        radrange = [str2num(answer{1}) str2num(answer{2})];
-        sens = str2double(answer{3});
-        flag = str2num(answer{4});
-        close(g)
-    end
-    
     for i=1:bssfpFrames
         image = bssfp(crop(1):crop(2),crop(3):crop(4),i);
 
         %% Find circles (Hough transform)
         image = rescale(image); %normalizes image
-        [centers,radii,~] = imfindcircles(image,radrange,'ObjectPolarity','bright','Sensitivity',sens);
+%         [centers,radii,~] = imfindcircles(image,radrange,'ObjectPolarity','bright','Sensitivity',sens);
         BW = false(size(image,1),size(image,2));
-        [Xgrid,Ygrid] = meshgrid(1:size(BW,2),1:size(BW,1));
-        for n = 1:numROIs
-            try
-                BW = BW | (hypot(Xgrid-centers(n,1),Ygrid-centers(n,2)) <= radii(n));
-            catch error
-                if numROIs==2
-                    save('AscAo_mask.mat', 'AscAo_mask')    
-                    save('DescAo_mask.mat', 'DescAo_mask')
-                else    
-                    save('AbdAo_mask.mat', 'AbdAo_mask')
-                end
-                close all
-                cd(home_dir)
-                disp(['Frame: ' num2str(i)])
-                rethrow(error)
-            end
-        end
+%         [Xgrid,Ygrid] = meshgrid(1:size(BW,2),1:size(BW,1));
+%         for n = 1:numROIs
+%             try
+%                 BW = BW | (hypot(Xgrid-centers(n,1),Ygrid-centers(n,2)) <= radii(n));
+%             catch error
+%                 if numROIs==2
+%                     save('AscAo_mask.mat', 'AscAo_mask')    
+%                     save('DescAo_mask.mat', 'DescAo_mask')
+%                 else    
+%                     save('AbdAo_mask.mat', 'AbdAo_mask')
+%                 end
+%                 close all
+%                 cd(home_dir)
+%                 disp(['Frame: ' num2str(i)])
+%                 rethrow(error)
+%             end
+%         end
+% 
+%         %% Morphological Dilation 
+%         BW = imdilate(BW,strel('disk',3)); %dilate so active contours pulls in segmentation
+% 
+%         %% Active Contours + Dilation
+%         BW = activecontour(image,BW,300,'Chan-Vese','SmoothFactor',5,'ContractionBias',0.2);
+%         BW = imdilate(BW,strel('disk',2));
 
-        %% Morphological Dilation 
-        BW = imdilate(BW,strel('disk',3)); %dilate so active contours pulls in segmentation
+%         x1=55;
+%         y1=40;
+%         radius1 = 22;
+%         [xx1,yy1] = ndgrid((1:cropSize)-y1,(1:cropSize)-x1);
+%         circ1 = (xx1.^2 + yy1.^2)<radius1^2;
+%         x2=95;
+%         y2=100;
+%         radius2 = 18;
+%         [xx2,yy2] = ndgrid((1:cropSize)-y2,(1:cropSize)-x2);
+%         circ2 = (xx2.^2 + yy2.^2)<radius2^2;
+%         BW = BW + circ1 + circ2;
 
-        %% Active Contours + Dilation
-        BW = activecontour(image,BW,300,'Chan-Vese','SmoothFactor',5,'ContractionBias',0.2);
-        BW = imdilate(BW,strel('disk',2));
-        if ~nnz(BW)
-            circ1 = circleROI(param1(1), param1(2), param1(3), cropSize);
-            circ2 = circleROI(param2(1), param2(2), param2(3), cropSize);
-            BW = circ1 + circ2;
-        elseif sum(BW, 'all') < 1000
-            circ1 = circleROI(param1(1), param1(2), param1(3), cropSize);
-            circ2 = circleROI(param2(1), param2(2), param2(3), cropSize);
-            BW = circ1 + circ2;
-        end
-
-        %% Freehand ROI conversion
-        blocations = bwboundaries(BW,'noholes');
-        numBlobs = numel(blocations);
-        f = figure;
-        imshow(image, []);
-        f.WindowState = 'maximized';
-
-        for ind = 1:numBlobs
-            pos = blocations{ind}; %convert to x,y order.
-            subx = int16(linspace(1,length(pos(:,1)),7)); %subsample positions (x)
-            suby = int16(linspace(1,length(pos(:,2)),7)); %subsample positions (y)
-            posSpline = interparc(90,pos(subx,1),pos(suby,2),'csape'); %closed spline
-            posSpline = fliplr(posSpline);
-            % Can 'ESC' to delete ROI, Right-click to Add Waypoint
-            waypoints = zeros(90,1); %initialize index locations of waypoints
-            waypoints(1:15:end) = 1; %set 8 evenly-spaced waypoints
-            h = drawfreehand('Position', posSpline,'FaceAlpha',0.15,'LineWidth',1, ...
-                'Multiclick',true,'Waypoints',logical(waypoints)); %create freehand ROI
-            customWait(h); %see custom function below in 'helper functions'
-        end
-
-        hfhs = findobj(gca, 'Type', 'images.roi.Freehand');
-        editedMask = false(size(image));
-        for ind = 1:numel(hfhs)
-            editedMask = editedMask | hfhs(ind).createMask(); %accumulate mask from each ROI
-            boundaryLocation = round(hfhs(ind).Position); %include ROI boundary
-            bInds = sub2ind(size(image), boundaryLocation(:,2), boundaryLocation(:,1));
-            editedMask(bInds) = true;
-        end
-
+        x1=90;
+        y1=100;
+        radius1 = 40;
+        [xx1,yy1] = ndgrid((1:cropSize)-y1,(1:cropSize)-x1);
+        circ1 = (xx1.^2 + yy1.^2)<radius1^2;
+        x2=140;
+        y2=180;
+        radius2 = 30;
+        [xx2,yy2] = ndgrid((1:cropSize)-y2,(1:cropSize)-x2);
+        circ2 = (xx2.^2 + yy2.^2)<radius2^2;
+        BW = BW + circ1 + circ2;
+        
+%         %% Freehand ROI conversion
+%         blocations = bwboundaries(BW,'noholes');
+%         numBlobs = numel(blocations);
+%         f = figure;
+%         imshow(image, []);
+%         f.WindowState = 'maximized';
+% 
+%         for ind = 1:numBlobs
+%             pos = blocations{ind}; %convert to x,y order.
+%             subx = int16(linspace(1,length(pos(:,1)),7)); %subsample positions (x)
+%             suby = int16(linspace(1,length(pos(:,2)),7)); %subsample positions (y)
+%             posSpline = interparc(90,pos(subx,1),pos(suby,2),'csape'); %closed spline
+%             posSpline = fliplr(posSpline);
+%             % Can 'ESC' to delete ROI, Right-click to Add Waypoint
+%             waypoints = zeros(90,1); %initialize index locations of waypoints
+%             waypoints(1:15:end) = 1; %set 8 evenly-spaced waypoints
+%             h = drawfreehand('Position', posSpline,'FaceAlpha',0.15,'LineWidth',1, ...
+%                 'Multiclick',true,'Waypoints',logical(waypoints)); %create freehand ROI
+%             customWait(h); %see custom function below in 'helper functions'
+%         end
+% 
+%         hfhs = findobj(gca, 'Type', 'images.roi.Freehand');
+%         editedMask = false(size(image));
+%         for ind = 1:numel(hfhs)
+%             editedMask = editedMask | hfhs(ind).createMask(); %accumulate mask from each ROI
+%             boundaryLocation = round(hfhs(ind).Position); %include ROI boundary
+%             bInds = sub2ind(size(image), boundaryLocation(:,2), boundaryLocation(:,1));
+%             editedMask(bInds) = true;
+%         end
+        editedMask = BW;
+        
         %% Separate Ascending and Descending Aorta
         [r,c] = find(editedMask);
         [~,idx_min] = min(r);
@@ -198,8 +189,8 @@ if needsMask %if we haven't loaded in the mask...
         end
 
         %% Show and Save Images
-        label = labeloverlay(image,editedMask);
-        figure; imshow(label,[]);
+%         label = labeloverlay(image,editedMask);
+%         figure; imshow(label,[]);
 
         if numROIs==2
             AscAo_mask(:,:,i) = aorta1;
@@ -210,13 +201,12 @@ if needsMask %if we haven't loaded in the mask...
     end
 end 
 
-save('crop_params.mat','crop_params');
 save('bssfp.mat','bssfp');
 save('bssfp_info.mat','bssfp_info');
 save('bssfp_times.mat','bssfp_times');
 if numROIs==2
-    save('AscAo_mask.mat','AscAo_mask')    
-    save('DescAo_mask.mat','DescAo_mask')
+    save('AscAo_mask_manual.mat','AscAo_mask')    
+    save('DescAo_mask_manual.mat','DescAo_mask')
 else    
     save('AbdAo_mask.mat','AbdAo_mask')
 end
@@ -288,11 +278,10 @@ bssfp = imresize3(bssfp,[desiredSize desiredSize desiredFrames]);
 pc  = imresize3(pc,[desiredSize desiredSize desiredFrames]);
 mag = imresize3(mag,[desiredSize desiredSize desiredFrames]);
 masks = imresize3(masks,[desiredSize desiredSize desiredFrames]);
-% masks = imtranslate(masks, [25, -11]);
-pcmr_times = interp1((1:pcFrames),pcmr_times,linspace(1,pcFrames,desiredFrames),'linear');
+pcmr_times = round(interp1((1:pcFrames),pcmr_times,linspace(1,pcFrames,desiredFrames),'linear'));
 bssfp_times = interp1((1:bssfpFrames),bssfp_times,linspace(1,bssfpFrames,desiredFrames),'linear');
 
-save('interp_masks.mat','masks');
+save('interp_masks_manual.mat','masks');
 disp("Calculating flow data.")
 
 % Separate ascending and descending aorta and calculate area and flow
@@ -335,18 +324,15 @@ for i=1:desiredFrames
 end
 
 
-save_folder = uigetdir(home_dir,'Select folder to save PWV data');
+% save_folder = uigetdir(home_dir,'Select folder to save PWV data');
+save_folder = '..';
 cd(save_folder)
 if ~exist('PWV_QA_Analysis','dir')
     mkdir('PWV_QA_Analysis');
 end 
 cd('PWV_QA_Analysis');
-AscAo_flow = smoothdata(AscAo_flow,'gaussian',4);
-% AscAo_area = smoothdata(AscAo_area,'gaussian',4);
-AscAo_flow = circshift(AscAo_flow,7);
-AscAo_area = circshift(AscAo_area,7);
-tz = circshift(pcmr_times,7);
-
+AscAo_flow = circshift(AscAo_flow,5);
+AscAo_area = circshift(AscAo_area,5);
 if numROIs==2
     save('AscAo_flow.mat','AscAo_flow');
     save('DescAo_flow.mat','DescAo_flow');
@@ -381,19 +367,13 @@ if numROIs==2
 %     free2 = drawfreehand;
 %     early_sys = inpolygon(AscAo_area(systole),AscAo_flow(systole),free2.Position(:,1),free2.Position(:,2));
     figure; 
-    % scatter([AscAo_area_int(3*end/4+1:end) AscAo_area_int(1:end/4)], [AscAo_flow(3*end/4+1:end) AscAo_flow(1:end/4)],[], linspace(1,length(AscAo_area)/2,length(AscAo_area)/2))
-    %  scatter(AscAo_area_int, AscAo_flow,[], tz)
+%     scatter([AscAo_area_int(3*end/4+1:end) AscAo_area_int(1:end/4)], [AscAo_flow(3*end/4+1:end) AscAo_flow(1:end/4)],[], linspace(1,length(AscAo_area)/2,length(AscAo_area)/2))
+    scatter(AscAo_area_int(1:end/2), AscAo_flow(1:end/2),[], linspace(1,length(AscAo_area)/2,length(AscAo_area)/2))
     colormap jet
     % colorbar
-    scatter(AscAo_area_int(1:40), AscAo_flow(1:40),[], pcmr_times(1:40))
-    ax = gca;
-    ax.FontSize = 17; 
-    c = colorbar;
-    c.Label.String = 'Time (ms)';
-    c.FontSize = 20;
-    title('Ascending Aorta - QA Plot','FontSize',42);  
-    xlabel('Area (cm^2)','FontSize',20);
-    ylabel('Flow (mL/s)','FontSize',20);
+    title('Ascending Aorta - QA'); 
+    xlabel('Area (cm^2)'); 
+    ylabel('Flow (cm^3/s)');
     systolePts = [AscAo_area_int(asystole); AscAo_flow(asystole)]';
     [coef,stats] = polyfit(systolePts(:,1),systolePts(:,2),1);
     minArea = min(systolePts(:,1));
@@ -403,12 +383,8 @@ if numROIs==2
     delete(free1)
     hold on; 
     scatter(systolePts(:,1),systolePts(:,2),72,'k','x');
-    plot(xq,yq,'k','LineWidth',1.4); 
-    % str = ['Slope = ' num2str(coef(1)) '\newlineIntcpt = ' num2str(coef(2))];
-    str = ['Slope = ' num2str(coef(1))];
-%     '\newlineIntcpt = ' num2str(coef(2))
-%     text(min(AscAo_area_int)+0.1,max(AscAo_flow)+0.1,str);
-    
+    plot(xq,yq); 
+    str = ['Slope = ' num2str(coef(1)) '\newlineIntcpt = ' num2str(coef(2))];
     text(min(xq),max(yq)-0.1*max(yq),str);
     hold off;
     AscAo_PWV = coef(1);
@@ -441,7 +417,8 @@ if numROIs==2
 %     free2 = drawfreehand;
 %     early_sys = inpolygon(AscAo_area(systole),AscAo_flow(systole),free2.Position(:,1),free2.Position(:,2));
     figure; 
-    scatter([DescAo_area_int(3*end/4+1:end) DescAo_area_int(1:end/4)], [DescAo_flow(3*end/4+1:end) DescAo_flow(1:end/4)],[], linspace(1,length(DescAo_area)/2,length(DescAo_area)/2))
+%     scatter([DescAo_area_int(3*end/4+1:end) DescAo_area_int(1:end/4)], [DescAo_flow(3*end/4+1:end) DescAo_flow(1:end/4)],[], linspace(1,length(DescAo_area)/2,length(DescAo_area)/2))
+    scatter(DescAo_area_int(1:end/2), DescAo_flow(1:end/2),[], linspace(1,length(DescAo_area)/2,length(DescAo_area)/2))
     colormap jet
     % colorbar
     title('Descending Aorta - QA'); 
@@ -511,8 +488,7 @@ else
     scatter(systolePts(:,1),systolePts(:,2),72,'k','x');
     plot(xq,yq); 
     str = ['Slope = ' num2str(coef(1)) '\newlineIntcpt = ' num2str(coef(2))];
-    % text(max(AbdAo_area_int)+0.1,max(AbdAo_flow)+0.1,str);
-    text(min(AbdAo_area_int)+0.1,max(AbdAo_flow)+0.1,str);
+    text(max(AbdAo_area_int)+0.1,max(AbdAo_flow)+0.1,str);
     hold off;
     AbdAo_PWV = coef(1);
     disp(['PWV_QA = ' num2str(coef(1)*0.01) ' m/s']);
@@ -544,8 +520,4 @@ function clickCallback(~,evt)
     if strcmp(evt.SelectionType,'double')
         uiresume;
     end
-end
-function circ = circleROI(x,y,r,imgSize)
-    [xx,yy] = ndgrid((1:imgSize)-y,(1:imgSize)-x);
-    circ = (xx.^2 + yy.^2)<r^2;
 end
