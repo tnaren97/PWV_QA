@@ -1,4 +1,7 @@
-clear all; close all; clc;
+clear all; close all;
+
+disp("Choose where to save analysis data")
+save_loc = uigetdir(pwd, "Choose where to save analysis data");
 
 plane = inputdlg("Type in analysis region name");
 plane = plane{1};
@@ -10,12 +13,21 @@ list_options = {'kmeans','otsu','circle+contours','hough','hough+contours','edge
 [choice, tf] = listdlg('ListString', list_options, 'InitialValue', 5, 'PromptString', "Choose a segmentation method", 'SelectionMode', 'single');
 segType = list_options{choice};
 
+cardiac_answer = questdlg("Do cardiac output analysis?");
+switch cardiac_answer
+    case "Yes"
+        sys_flag = 1;
+    case "No"
+        sys_flag = 0;
+    case "Cancel"
+        sys_flag = 0;
+end
+
 % plane = 'asc';
 % segType = 'hough+contours';
 % num_roi = 2;
 
 date = string(datetime('now', 'Format', 'yyyy-MM-dd-HHmm'));
-save_loc = uigetdir(pwd, "Choose where to save analysis data");
 
 [~, save_name] = fileparts(save_loc);
 if strcmp(save_name, '2DPC_QA_Analysis')
@@ -33,8 +45,8 @@ if ~exist(analysis_dir,'dir')
 end
 disp("Created analysis folder")
 
-%% Load BSSFP
 
+%% Load BSSFP
 bssfp_data_folder = fullfile(result_dir, plane, 'bssfp');
 if ~exist(bssfp_data_folder,'dir')
     mkdir(bssfp_data_folder);
@@ -58,7 +70,12 @@ if ~exist(fullfile(bssfp_data_folder, 'bssfp.mat'),'file')
         end 
     end     
     bssfpInfo = dicominfo(fullfile(dirFiles(1).folder, dirFiles(1).name)); %grab dicom info from 1st frame
-    bssfp = zeros(bssfpSize,bssfpSize,bssfpFrames);
+    bssfpHR = bssfpInfo.HeartRate; % bpm
+    bssfpHeight = double(bssfpInfo.Height);
+    bssfpWidth = double(bssfpInfo.Width);
+    bssfpFrames = bssfpInfo.CardiacNumberOfImages;
+    pixelArea = bssfpInfo.PixelSpacing(1).*bssfpInfo.PixelSpacing(2); % mm^2
+    bssfp = zeros(bssfpHeight,bssfpWidth,bssfpFrames);
     for f=1:length(dirFiles)
         bssfp(:,:,f) = dicomread(fullfile(dirFiles(f).folder, dirFiles(f).name));
         temp = dicominfo(fullfile(dirFiles(f).folder, dirFiles(f).name));
@@ -71,10 +88,12 @@ else
     load(fullfile(bssfp_data_folder, 'bssfp.mat'));
     load(fullfile(bssfp_data_folder, 'bssfpTimes.mat'));
     load(fullfile(bssfp_data_folder, 'bssfpInfo.mat'));
+    bssfpHeight = double(bssfpInfo.Height);
+    bssfpWidth = double(bssfpInfo.Width);
+    bssfpFrames = bssfpInfo.CardiacNumberOfImages;
+    bssfpHR = bssfpInfo.HeartRate; % bpm
+    pixelArea = bssfpInfo.PixelSpacing(1).*bssfpInfo.PixelSpacing(2); % mm^2
 end 
-bssfpSize = double(bssfpInfo.Height); %assumes matrix size is equal in x and y
-bssfpFrames = bssfpInfo.CardiacNumberOfImages;
-pixelArea = bssfpInfo.PixelSpacing(1).*bssfpInfo.PixelSpacing(2)*1e-06; % m^2
 tavg_bssfp = mean(bssfp, 3);
 
 %% Initialize Masks
@@ -82,7 +101,7 @@ answer = questdlg("Load masks?");
 switch answer
     case 'Yes'
         % select mask.mat file
-        [mask_file, mask_path] = uigetfile({'*.mat'}, "Select mask file");
+        [mask_file, mask_path] = uigetfile({'*.mat'}, "Select mask file", fullfile(bssfp_data_folder, 'masks.mat'));
         load(fullfile(mask_path, mask_file));
         load(fullfile(mask_path, 'crop.mat'))
         load(fullfile(mask_path, 'areas.mat'))
@@ -90,13 +109,13 @@ switch answer
 
     case 'No'
         % Zoom in Manually
-        figure; imshow(tavg_bssfp,[]); title('ZOOM');
+        figure; imshow(tavg_bssfp,[]); title('Select region to zoom in on');
         rect = drawrectangle;
         crop = round([rect.Position(2), rect.Position(2)+rect.Position(4), rect.Position(1), rect.Position(1)+rect.Position(3)]);
         save(fullfile(bssfp_data_folder, 'crop.mat'), 'crop')
         close all;
 
-        mask = zeros(num_roi, bssfpSize, bssfpSize, bssfpFrames);
+        mask = zeros(num_roi, bssfpHeight, bssfpWidth, bssfpFrames);
         area = zeros(num_roi, bssfpFrames);
         needsMask = 1;
 
@@ -104,7 +123,7 @@ switch answer
         return
 end 
 
-disp("Segmenting bSSFP images")
+disp("Segmenting bSSFP images...")
 radrange = [10 30]; % radius range for Hough Transform
 sens = 0.8; % sensitivity of circle find
 %% Segment Each Frame Separately
@@ -214,9 +233,9 @@ if needsMask % if we haven't loaded in the mask...
         for j=1:num_roi
             vessel = bwselect(BW, sortedCircles(j, 1), sortedCircles(j, 2), 8);
             vessel = padarray(vessel, [crop(1) crop(3)], 'pre');
-            vessel = padarray(vessel, [bssfpSize-crop(2)-1 bssfpSize-crop(4)-1], 'post');
+            vessel = padarray(vessel, [bssfpHeight-crop(2)-1 bssfpWidth-crop(4)-1], 'post');
             mask(j,:,:,i) = vessel;
-            area(j, i) = sum(vessel(:))*pixelArea; %m^2
+            area(j, i) = sum(vessel(:))*pixelArea; % mm^2
         end
         close all
     end
@@ -251,7 +270,11 @@ if ~exist(fullfile(pc_data_folder, 'pc.mat'),'file')
     end 
     
     pcInfo = dicominfo(fullfile(dirFiles(1).folder, dirFiles(1).name)); %grab dicom info from 1st frame
-    pcmr = zeros(pcSize,pcSize,pcFrames);
+    pcHeight = double(pcInfo.Height);
+    pcWidth = double(pcInfo.Width);
+    pcFrames = pcInfo.CardiacNumberOfImages;
+    pcHR = pcInfo.HeartRate; % bpm
+    pcmr = zeros(pcHeight,pcWidth,pcFrames);
     for f=1:length(dirFiles)
         pcmr(:,:,f) = dicomread(fullfile(dirFiles(f).folder, dirFiles(f).name));
         temp = dicominfo(fullfile(dirFiles(f).folder, dirFiles(f).name));
@@ -273,9 +296,12 @@ else
     load(fullfile(pc_data_folder, 'mag.mat'));
     load(fullfile(pc_data_folder, 'pcmrTimes.mat'))
     load(fullfile(pc_data_folder, 'pcInfo.mat'));
-end 
-pcSize = double(pcInfo.Height); %assumes matrix size is equal in x and y
-pcFrames = pcInfo.CardiacNumberOfImages;
+    pcHeight = double(pcInfo.Height);
+    pcWidth = double(pcInfo.Width);
+    pcFrames = pcInfo.CardiacNumberOfImages;
+    pcHR = pcInfo.HeartRate; % bpm
+end
+
 
 
 %% Save ROI images
@@ -293,41 +319,132 @@ pcFrames = pcInfo.CardiacNumberOfImages;
 % imwrite(frame2im(frame_mag),fullfile(analysis_dir, 'pc_mask.png'));
 % close(h);
 
+% results = cell(6+2*num_roi, max(bssfpFrames, pcFrames)+1);
+% results{5, 1} = 'bSSFP Trigger Times (ms)';
+% for z=1:size(bssfpTimes,2)
+%     results{5, z+1} = bssfpTimes(z);
+% end
+% for j=1:num_roi
+%     results{5+j, 1} = sprintf('ROI %d: Area (mm^2)', j);
+%     for z=1:size(area,2)
+%         results{5+j, z+1} = area(j,z);
+%     end
+% end
+% results{6+num_roi, 1} = 'PC Trigger Times (ms)';
+% for z=1:size(pcmrTimes,2)
+%     results{6+num_roi, z+1} = pcmrTimes(z);
+% end
 
 %% Make temporal resolutions equivalent
-desiredSize = max(bssfpSize, pcSize);
-desiredFrames = max(bssfpFrames, pcFrames);
+% desiredFrames = max(bssfpFrames, pcFrames);
+% pcmrTimes_int = interp1((1:pcFrames),pcmrTimes,linspace(1,pcFrames,desiredFrames),'linear');
+% bssfpTimes_int = interp1((1:bssfpFrames),bssfpTimes,linspace(1,bssfpFrames,desiredFrames),'linear');
 
-bssfp = imresize3(bssfp,[desiredSize desiredSize desiredFrames]);
-pc = imresize3(pc,[desiredSize desiredSize desiredFrames]);
-mag = imresize3(mag,[desiredSize desiredSize desiredFrames]);
-temp_mask = zeros(num_roi, desiredSize, desiredSize, desiredFrames);
-temp_area = zeros(num_roi, desiredFrames);
-for i=1:num_roi
-    temp_mask(i, :,:,:) = imresize3(squeeze(mask(i, :,:,:)), [desiredSize desiredSize desiredFrames]);
-    temp_area(i, :) = interp1((1:bssfpFrames),squeeze(area(i,:)),linspace(1,bssfpFrames,desiredFrames), 'linear');
-end
-mask = temp_mask;
-area = temp_area;
+% bssfpTimes_int = interp1(bssfpTimes, 1:1:maxTime, 'linear', 'extrap');
+% pcmrTimes_int = interp1(1:pcmrFrames, pcmrTimes, timesInterp, 'linear', 'extrap');
 
-pcmrTimes = interp1((1:pcFrames),pcmrTimes,linspace(1,pcFrames,desiredFrames),'linear');
-bssfpTimes = interp1((1:bssfpFrames),bssfpTimes,linspace(1,bssfpFrames,desiredFrames),'linear');
+% mag_int = imresize3(mag,[desiredHeight desiredWidth desiredFrames]);
 
+% interp_quest = questdlg("Load interpolated data?");
+% switch interp_quest
+%     case "Yes"
+        % minTime = min(min(pcmrTimes),min(bssfpTimes));
+        % if minTime < 1
+        %     minTime = 1;
+        % end
+        % maxTime = max(max(pcmrTimes),max(bssfpTimes));
+        % timesInterp = 1:1:maxTime;
+        % desiredFrames = length(timesInterp);
+        % desiredHeight = max(bssfpHeight, pcHeight);
+        % desiredWidth = max(bssfpWidth, pcWidth);
+        % bssfpTimes_int = timesInterp;
+        % pcmrTimes_int = timesInterp;
+        % 
+        % load(fullfile(pc_data_folder, 'pc_interp.mat'), 'pc_int');
+        % load(fullfile(bssfp_data_folder, 'bssfp_interp.mat'), 'bssfp_int');
+        % load(fullfile(bssfp_data_folder, 'mask_interp.mat'), 'mask_int');
+        % load(fullfile(bssfp_data_folder, 'area_interp.mat'), 'area_int');
 
-%% Calculating Velocity and Flow
-for j=1:num_roi
-    for i=1:desiredFrames
-        ROI = imbinarize(mask(j,:,:,i));
-        vTemp = pc(:,:,i)*0.001; %single frame velocities (m/s)
-        ROIindex = double(vTemp(ROI)); %indexed velocities within mask
-        meanV = mean(ROIindex); %mean velocity in frame i (m/s)
-        flow(j, i) = area(j, i).*meanV; %flow in frame i (m^3/s)
-    end
-end
-save(fullfile(analysis_dir, 'flows.mat'), 'flow');
-disp('Flow data saved')
+    % case "No"
+        % add duplicated beginning and end points to both ends to make interpolation cylical
+        disp("Interpolating data...")
+        desiredHeight = max(bssfpHeight, pcHeight);
+        desiredWidth = max(bssfpWidth, pcWidth);
+        
+        minTime = min(min(pcmrTimes),min(bssfpTimes));
+        if minTime < 1
+            minTime = 1;
+        end
+        maxTime = max(max(pcmrTimes),max(bssfpTimes));
+        timesInterp = 1:1:maxTime;
+        desiredFrames = length(timesInterp);
+        
+        bssfp_adj = cat(3, bssfp(:,:,end), bssfp, bssfp(:,:,1));
+        bssfp_adj = imresize3(bssfp_adj,[desiredHeight desiredWidth bssfpFrames+2]);
+        bssfpTimes_adj = cat(2, minTime-1, bssfpTimes, maxTime+1);
+        
+        pc_adj = cat(3, pc(:,:,end), pc, pc(:,:,1));
+        pc_adj = imresize3(pc_adj,[desiredHeight desiredWidth pcFrames+2]);
+        pcmrTimes_adj = cat(2, minTime-1, pcmrTimes, maxTime+1);
+        
+        mask_adj = cat(4, mask(:,:,:,end), mask, mask(:,:,:,1));
+        area_adj = cat(2, area(:,end), area, area(:,1));
+        
+        bssfpTimes_int = timesInterp;
+        [borig_x, borig_y, borig_t] = meshgrid(1:desiredHeight, 1:desiredWidth, bssfpTimes_adj);
+        [bnew_x, bnew_y, bnew_t] = meshgrid(1:desiredHeight, 1:desiredWidth, bssfpTimes_int);
+        bssfp_int = interp3(borig_x, borig_y, borig_t, bssfp_adj, bnew_x, bnew_y, bnew_t, 'linear');
+        
+        pcmrTimes_int = timesInterp;
+        [porig_x, porig_y, porig_t] = meshgrid(1:desiredHeight, 1:desiredWidth, pcmrTimes_adj);
+        [pnew_x, pnew_y, pnew_t] = meshgrid(1:desiredHeight, 1:desiredWidth, pcmrTimes_int);
+        pc_int = interp3(porig_x, porig_y, porig_t, pc_adj, pnew_x, pnew_y, pnew_t, 'linear');
+        
+        mask_int = zeros(num_roi, desiredHeight, desiredWidth, desiredFrames);
+        area_int = zeros(num_roi, desiredFrames);
+        for j=1:num_roi
+            % mask_int(j, :,:,:) = imresize3(squeeze(mask(j, :,:,:)), [desiredHeight desiredWidth desiredFrames]);
+            mask_int(j, :,:,:) = interp3(borig_x, borig_y, borig_t, squeeze(mask_adj(j, :,:,:)), bnew_x, bnew_y, bnew_t, 'linear');
+            % area_int(j, :) = interp1((1:length(area),squeeze(area(j,:)),linspace(1,length(area),desiredFrames), 'linear');
+            area_int(j, :) = interp1(bssfpTimes_adj, squeeze(area_adj(j, :)), bssfpTimes_int, 'linear');
+        end
+        
+%         save(fullfile(pc_data_folder, 'pc_interp.mat'), 'pc_int');
+%         save(fullfile(bssfp_data_folder, 'bssfp_interp.mat'), 'bssfp_int');
+%         save(fullfile(bssfp_data_folder, 'mask_interp.mat'), 'mask_int');
+%         save(fullfile(bssfp_data_folder, 'area_interp.mat'), 'area_int');
+%         disp("Interpolated data saved")
+% 
+%     case "Cancel"
+%         return
+% end
+
+% flow_quest = questdlg("Load flow data?");
+% switch flow_quest
+%     case "Yes"
+%         load(fullfile(pc_data_dir, 'flows.mat'), 'flow');
+%     case "No"
+        %% Calculating flow
+        disp("Calculating flow...")
+        flow = zeros(num_roi, desiredFrames);
+        for j=1:num_roi
+            for i=1:desiredFrames
+                ROI = imbinarize(mask_int(j,:,:,i));
+                vTemp = pc_int(:,:,i); %single frame velocities (mm/s)
+                ROIindex = double(vTemp(ROI)); %indexed velocities within mask
+                vMean = mean(ROIindex); %mean velocity in frame i (mm/s)
+                flow(j, i) = area_int(j, i).*vMean.*0.001; %flow in frame i (mL/s)
+            end
+        end
+        save(fullfile(pc_data_folder, 'flows.mat'), 'flow');
+        disp('Flow data saved')
+%     case "Cancel"
+%         return
+% end
+
 
 %% Shift the data due to periph. gating lag + prosp. gating lags
+disp("Shifting velocity data...")
 flag = 0;
 shift = 0;
 options.WindowStyle = 'normal';
@@ -338,71 +455,134 @@ while ~flag
     else
         plot(circshift(flow(1, :), shift));
     end
+    title("Shift flow curve")
     % movegui(f, 'west');
-    answer = inputdlg({"Enter shift amount:", "Accept? (enter 1)"}, "Flow curve shift", ...
+    answer = inputdlg({"Enter shift amount:", "Accept? (enter 1)"}, "Velocity curve shift", ...
         [1 30; 1 30], {num2str(shift), num2str(flag)}, options);
-    shift = str2num(answer{1});
-    flag = str2num(answer{2});
+    shift = str2double(answer{1});
+    flag = str2double(answer{2});
     close(f)
 end
-bssfp = circshift(bssfp,shift,3);
-pc = circshift(pc,shift,3);
-mag = circshift(mag,shift,3);
+bssfp_int = circshift(bssfp_int,shift,3);
+pc_int = circshift(pc_int,shift,3);
+% mag_int = circshift(mag_int,shift,3);
 for i=1:num_roi
-    mask(i, :,:,:) = circshift(mask(i, :,:,:), shift, 4);
-    area(i, :) = circshift(area(i, :), shift, 2);
+    mask_int(i, :,:,:) = circshift(mask_int(i, :,:,:), shift, 4);
+    area_int(i, :) = circshift(area_int(i, :), shift, 2);
     flow(i, :) = circshift(flow(i, :), shift, 2);
 end
-mean_rr = mean([pcInfo.LowRRValue, pcInfo.HighRRValue])*0.001; % mean rr interval in s
-stroke_volume = abs(sum(flow, 2)./(60/mean_rr));
 
 
 %% Compute PWV
+disp("Calculating PWV...")
+PWV = zeros(num_roi, 1);
+ESV = zeros(num_roi, 1);
+EDV = zeros(num_roi, 1);
+
+flow_calc = flow;
 for j=1:num_roi
-    if mean(flow(j,:))<0
-        flow(j, :) = -1*flow(j, :);
-    end      
-    maxTime = max(max(pcmrTimes),max(bssfpTimes));
-    area_int = interp1(bssfpTimes,area(j, :),linspace(1,maxTime,maxTime));
-    
-    %Define Systolic Region (flow vs. time)
-    figure; plot(flow(j, :)); 
-    title(sprintf('%s: ROI %d - Flow', plane, j)); xlabel('Time Frame'); ylabel('Flow (m^3/s)');
-    disp("Draw around the upslope portion of the curve")
+    if mean(flow_calc(j,:))<0
+        flow_calc(j, :) = -1*flow_calc(j, :);
+    end
+
+    %Define Early Systolic Region (flow vs. time)
+    figure; plot(flow_calc(j, :)); 
+    title(sprintf('%s: ROI %d - Early Systole', plane, j)); xlabel('Time (ms)'); ylabel('Flow (mL/s)');
+    disp("Draw around the early systole (upslope) portion of the flow curve")
     flow_plot = gcf;
     free = drawfreehand;
-    systolePts = find(inpolygon(linspace(1,length(flow(j, :)),length(flow(j, :))),flow(j, :),free.Position(:,1),free.Position(:,2)));
-    systoleTimes = pcmrTimes(systolePts);
+    earlySystolePts_int = find(inpolygon(linspace(1,length(flow_calc(j, :)),length(flow_calc(j, :))),flow_calc(j, :),free.Position(:,1),free.Position(:,2)));
+    earlySystoleTimes_int = pcmrTimes_int(earlySystolePts_int);
+    earlySystolePts = ismember(earlySystoleTimes_int, pcmrTimes);
+    earlySystoleTimes = earlySystoleTimes_int(earlySystolePts);
     saveas(flow_plot, fullfile(analysis_dir, sprintf('flowplot_ROI_%d', j)));
     delete(free); close(flow_plot); clear flow_plot;
+
+    if sys_flag
+        %Define Systolic Region
+        figure; plot(flow_calc(j, :)); 
+        title(sprintf('%s: ROI %d - Systole', plane, j)); xlabel('Time (ms)'); ylabel('Flow (mL/s)');
+        disp("Draw around the systole portion of the flow curve")
+        flow_plot = gcf;
+        free = drawfreehand;
+        systolePts = find(inpolygon(linspace(1,length(flow_calc(j, :)),length(flow_calc(j, :))),flow_calc(j, :),free.Position(:,1),free.Position(:,2)));
+        systoleTimes = pcmrTimes_int(systolePts);
+        delete(free); close(flow_plot); clear flow_plot;
+        ESV(j) = trapz(systoleTimes*0.001, flow_calc(j, systolePts));
+
+        %Define Diastolic Region
+        figure; plot(flow_calc(j, :)); 
+        title(sprintf('%s: ROI %d - Diastole', plane, j)); xlabel('Time (ms)'); ylabel('Flow (mL/s)');
+        disp("Draw around the diastole portion of the flow curve")
+        flow_plot = gcf;
+        free = drawfreehand;
+        diastolePts = find(inpolygon(linspace(1,length(flow_calc(j, :)),length(flow_calc(j, :))),flow_calc(j, :),free.Position(:,1),free.Position(:,2)));
+        diastoleTimes = pcmrTimes_int(diastolePts);
+        delete(free); close(flow_plot); clear flow_plot;
+        EDV(j) = trapz(diastoleTimes*0.001, flow_calc(j, diastolePts));
+    end
     
     %Define Linear QA Region (flow vs. area)
-    x = area_int(systoleTimes); %time adjustment (fixing delays)
-    y = flow(j, systolePts);
+    % x = area_int(j, earlySystolePts_int);
+    % y = flow_calc(j, earlySystolePts_int);
+    x = area_int(j, earlySystolePts);
+    y = flow_calc(j, earlySystolePts);
     figure; scatter(x,y); 
-    title(sprintf('%s: ROI %d - QA Plot', plane, j)); xlabel('Area (m^2)'); ylabel('Flow (m^3/s)');
-    systolePts2 = [x; y]';
-    [coef,stats] = polyfit(systolePts2(:,1),systolePts2(:,2),1);
+    title(sprintf('%s: ROI %d - QA Plot', plane, j)); xlabel('Area (mm^2)'); ylabel('Flow (mL/s)');
+    earlySystolePts2 = [x; y]';
+    [coef,stats] = polyfit(earlySystolePts2(:,1),earlySystolePts2(:,2),1);
     
     %Linear regression
-    minArea = min(systolePts2(:,1));
-    maxArea = max(systolePts2(:,1));
+    minArea = min(earlySystolePts2(:,1));
+    maxArea = max(earlySystolePts2(:,1));
     xq = linspace(minArea-0.1,maxArea+0.1,100);
     yq = coef(1)*xq + coef(2); %y = mx+b
     hold on; 
-    scatter(systolePts2(:,1),systolePts2(:,2),72,'k','x');
+    scatter(earlySystolePts2(:,1),earlySystolePts2(:,2),72,'k','x');
     plot(xq,yq); 
     str = [];
-    text(min(xq),max(yq)-0.1*max(yq),sprintf('Slope = %.3f m/s \n Intcpt = %.3f', coef(1), coef(2)));
+    text(min(xq),max(yq)-0.1*max(yq),sprintf('Slope = %.4f \n Intcpt = %.4f', coef(1), coef(2)));
     hold off;
     QAplot = gcf; 
-    DescAo_PWV = coef(1);
-    fprintf('ROI %d PWV_QA = %.4f m/s\n', j, coef(1));
-    fprintf('ROI %d Stroke Volume = %.4f L\n', j, stroke_volume(j));
+    PWV(j) = coef(1); % m/s
+    fprintf('    ROI %d PWV_QA = %.4f m/s\n', j, PWV(j));
+    if sys_flag
+        fprintf('    ROI %d End Systolic Volume = %.4f mL\n', j, ESV(j));
+        fprintf('    ROI %d End Diastolic Volume = %.4f mL\n', j, EDV(j));
+        fprintf('    ROI %d Stroke Volume = %.4f mL\n', j, EDV(j) - ESV(j));
+        fprintf('    ROI %d Cardiac Output = %.4f (mL/min)\n', j, (EDV(j) - ESV(j))*pcHR);
+    end
     saveas(QAplot,fullfile(analysis_dir, sprintf('QAplot_ROI_%d', j)));
     save(fullfile(analysis_dir, sprintf('coef_ROI_%d.mat', j)), 'coef');
     save(fullfile(analysis_dir, sprintf('stats_ROI_%d.mat', j)), 'stats');
 end
+
+% Initialize array for Excel file
+results = cell(num_roi+1, 6);
+results{1, 1} = 'ROI';
+results{1, 2} = 'PWV (m/s)';
+if sys_flag
+    results{1, 3} = 'End Systolic Volume (mL)';
+    results{1, 4} = 'End Diastolic Volume (mL)';
+    results{1, 5} = 'Stroke Volume (mL)';
+    results{1, 6} = 'Cardiac Output (mL/min)';
+    results{1, 7} = 'Mean HR (bpm)';
+    results{2, 7} = pcHR;
+end
+
+% save to Excel file
+for j = 1:num_roi
+    results{j+1, 1} = j;
+    results{j+1, 2} = PWV(j);
+    if sys_flag
+        results{j+1, 3} = ESV(j);
+        results{j+1, 4} = EDV(j);
+        results{j+1, 5} = EDV(j) - ESV(j);
+        results{j+1, 6} = (EDV(j) - ESV(j)) * pcHR;
+    end
+end
+
+writecell(results, fullfile(analysis_dir, 'results.xlsx'))
 disp("( つ ◕_◕ )つ PWV-QA Data Saved! ( つ ◕_◕ )つ")
 
 
