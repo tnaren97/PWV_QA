@@ -3,10 +3,10 @@ clear all; close all;
 disp("Choose where to save analysis data")
 save_loc = uigetdir(pwd, "Choose where to save analysis data");
 
-plane = inputdlg("Type in analysis region name");
+plane = inputdlg("Type in the analysis region name");
 plane = plane{1};
 
-num_roi = inputdlg("Type in number of ROIs in plane");
+num_roi = inputdlg("Type in the number of ROIs in plane");
 num_roi = str2num(num_roi{1});
 
 list_options = {'kmeans','otsu','circle+contours','hough','hough+contours','edge+hough+contours'};
@@ -282,10 +282,6 @@ if ~exist(fullfile(pc_data_folder, 'pc.mat'),'file')
     end
     pc = pcmr(:,:,1:pcFrames);
     mag = pcmr(:,:,(pcFrames+1):end);
-    f = figure; imshow3D(mag); 
-    % movegui(f, 'west');
-    % g = figure; imshow3D(pc)
-    % movegui(g, 'east');
     pcmrTimes = pcmrTimes(1:pcFrames);
     save(fullfile(pc_data_folder, 'pc.mat'), 'pc');
     save(fullfile(pc_data_folder, 'mag.mat'), 'mag');
@@ -302,38 +298,6 @@ else
     pcHR = pcInfo.HeartRate; % bpm
 end
 
-
-
-%% Save ROI images
-% f = figure; imoverlay(rescale(tavg_bssfp), squeeze(sum(sum(mask, 1), 4)));
-% frame_bssfp = getframe(f);
-% imwrite(frame2im(frame_bssfp),fullfile(analysis_dir, 'tavg_bssfp_mask.png'));
-% close(f);
-% g = figure; imoverlay(mean(mag, 3), squeeze(sum(sum(mask, 1), 4)));
-% frame_mag = getframe(g);
-% imwrite(frame2im(frame_mag),fullfile(analysis_dir, 'mag_mask.png'));
-% close(g);
-% temp_mask = squeeze(sum(mask, 1));
-% h = figure; imoverlay(pc(:,:, 1), temp_mask(:,:,1));
-% frame_mag = getframe(h);
-% imwrite(frame2im(frame_mag),fullfile(analysis_dir, 'pc_mask.png'));
-% close(h);
-
-% results = cell(6+2*num_roi, max(bssfpFrames, pcFrames)+1);
-% results{5, 1} = 'bSSFP Trigger Times (ms)';
-% for z=1:size(bssfpTimes,2)
-%     results{5, z+1} = bssfpTimes(z);
-% end
-% for j=1:num_roi
-%     results{5+j, 1} = sprintf('ROI %d: Area (mm^2)', j);
-%     for z=1:size(area,2)
-%         results{5+j, z+1} = area(j,z);
-%     end
-% end
-% results{6+num_roi, 1} = 'PC Trigger Times (ms)';
-% for z=1:size(pcmrTimes,2)
-%     results{6+num_roi, z+1} = pcmrTimes(z);
-% end
 
 %% Make temporal resolutions equivalent
 % desiredFrames = max(bssfpFrames, pcFrames);
@@ -366,48 +330,49 @@ end
         % load(fullfile(bssfp_data_folder, 'area_interp.mat'), 'area_int');
 
     % case "No"
-        % add duplicated beginning and end points to both ends to make interpolation cylical
-        disp("Interpolating data...")
-        desiredHeight = max(bssfpHeight, pcHeight);
-        desiredWidth = max(bssfpWidth, pcWidth);
-        
-        minTime = min(min(pcmrTimes),min(bssfpTimes));
-        if minTime < 1
-            minTime = 1;
-        end
-        maxTime = max(max(pcmrTimes),max(bssfpTimes));
-        timesInterp = 1:1:maxTime;
-        desiredFrames = length(timesInterp);
-        
-        bssfp_adj = cat(3, bssfp(:,:,end), bssfp, bssfp(:,:,1));
-        bssfp_adj = imresize3(bssfp_adj,[desiredHeight desiredWidth bssfpFrames+2]);
-        bssfpTimes_adj = cat(2, minTime-1, bssfpTimes, maxTime+1);
-        
-        pc_adj = cat(3, pc(:,:,end), pc, pc(:,:,1));
-        pc_adj = imresize3(pc_adj,[desiredHeight desiredWidth pcFrames+2]);
-        pcmrTimes_adj = cat(2, minTime-1, pcmrTimes, maxTime+1);
-        
-        mask_adj = cat(4, mask(:,:,:,end), mask, mask(:,:,:,1));
-        area_adj = cat(2, area(:,end), area, area(:,1));
-        
-        bssfpTimes_int = timesInterp;
-        [borig_x, borig_y, borig_t] = meshgrid(1:desiredHeight, 1:desiredWidth, bssfpTimes_adj);
-        [bnew_x, bnew_y, bnew_t] = meshgrid(1:desiredHeight, 1:desiredWidth, bssfpTimes_int);
-        bssfp_int = interp3(borig_x, borig_y, borig_t, bssfp_adj, bnew_x, bnew_y, bnew_t, 'linear');
-        
-        pcmrTimes_int = timesInterp;
-        [porig_x, porig_y, porig_t] = meshgrid(1:desiredHeight, 1:desiredWidth, pcmrTimes_adj);
-        [pnew_x, pnew_y, pnew_t] = meshgrid(1:desiredHeight, 1:desiredWidth, pcmrTimes_int);
-        pc_int = interp3(porig_x, porig_y, porig_t, pc_adj, pnew_x, pnew_y, pnew_t, 'linear');
-        
-        mask_int = zeros(num_roi, desiredHeight, desiredWidth, desiredFrames);
-        area_int = zeros(num_roi, desiredFrames);
-        for j=1:num_roi
-            % mask_int(j, :,:,:) = imresize3(squeeze(mask(j, :,:,:)), [desiredHeight desiredWidth desiredFrames]);
-            mask_int(j, :,:,:) = interp3(borig_x, borig_y, borig_t, squeeze(mask_adj(j, :,:,:)), bnew_x, bnew_y, bnew_t, 'linear');
-            % area_int(j, :) = interp1((1:length(area),squeeze(area(j,:)),linspace(1,length(area),desiredFrames), 'linear');
-            area_int(j, :) = interp1(bssfpTimes_adj, squeeze(area_adj(j, :)), bssfpTimes_int, 'linear');
-        end
+
+% add duplicated beginning and end points to both ends to make interpolation cylical
+disp("Interpolating data...")
+desiredHeight = max(bssfpHeight, pcHeight);
+desiredWidth = max(bssfpWidth, pcWidth);
+
+minTime = min(min(pcmrTimes),min(bssfpTimes));
+if minTime < 1
+    minTime = 1;
+end
+maxTime = max(max(pcmrTimes),max(bssfpTimes));
+timesInterp = 1:1:maxTime;
+desiredFrames = length(timesInterp);
+
+bssfp_adj = cat(3, bssfp(:,:,end), bssfp, bssfp(:,:,1));
+bssfp_adj = imresize3(bssfp_adj,[desiredHeight desiredWidth bssfpFrames+2]);
+bssfpTimes_adj = cat(2, minTime-1, bssfpTimes, maxTime+1);
+
+pc_adj = cat(3, pc(:,:,end), pc, pc(:,:,1));
+pc_adj = imresize3(pc_adj,[desiredHeight desiredWidth pcFrames+2]);
+pcmrTimes_adj = cat(2, minTime-1, pcmrTimes, maxTime+1);
+
+mask_adj = cat(4, mask(:,:,:,end), mask, mask(:,:,:,1));
+area_adj = cat(2, area(:,end), area, area(:,1));
+
+bssfpTimes_int = timesInterp;
+[borig_x, borig_y, borig_t] = meshgrid(1:desiredHeight, 1:desiredWidth, bssfpTimes_adj);
+[bnew_x, bnew_y, bnew_t] = meshgrid(1:desiredHeight, 1:desiredWidth, bssfpTimes_int);
+bssfp_int = interp3(borig_x, borig_y, borig_t, bssfp_adj, bnew_x, bnew_y, bnew_t, 'linear');
+
+pcmrTimes_int = timesInterp;
+[porig_x, porig_y, porig_t] = meshgrid(1:desiredHeight, 1:desiredWidth, pcmrTimes_adj);
+[pnew_x, pnew_y, pnew_t] = meshgrid(1:desiredHeight, 1:desiredWidth, pcmrTimes_int);
+pc_int = interp3(porig_x, porig_y, porig_t, pc_adj, pnew_x, pnew_y, pnew_t, 'linear');
+
+mask_int = zeros(num_roi, desiredHeight, desiredWidth, desiredFrames);
+area_int = zeros(num_roi, desiredFrames);
+for j=1:num_roi
+    % mask_int(j, :,:,:) = imresize3(squeeze(mask(j, :,:,:)), [desiredHeight desiredWidth desiredFrames]);
+    mask_int(j, :,:,:) = interp3(borig_x, borig_y, borig_t, squeeze(mask_adj(j, :,:,:)), bnew_x, bnew_y, bnew_t, 'linear');
+    % area_int(j, :) = interp1((1:length(area),squeeze(area(j,:)),linspace(1,length(area),desiredFrames), 'linear');
+    area_int(j, :) = interp1(bssfpTimes_adj, squeeze(area_adj(j, :)), bssfpTimes_int, 'linear');
+end
         
 %         save(fullfile(pc_data_folder, 'pc_interp.mat'), 'pc_int');
 %         save(fullfile(bssfp_data_folder, 'bssfp_interp.mat'), 'bssfp_int');
@@ -419,25 +384,47 @@ end
 %         return
 % end
 
+
+%% Save ROI images
+e = figure; imshow(bssfp(:,:,1), []);
+frame_bssfp = getframe(e);
+imwrite(frame2im(frame_bssfp), fullfile(analysis_dir, 'bssfp.png'));
+close(e);
+f = figure; imshow(imoverlay(rescale(bssfp(:,:,1)), squeeze(sum(sum(mask, 1), 4))));
+frame_bssfp_mask = getframe(f);
+imwrite(frame2im(frame_bssfp_mask), fullfile(analysis_dir, 'bssfp_mask.png'));
+close(f);
+g = figure; imshow(rescale(pc_int(:,:,1)), []);
+frame_pc = getframe(g);
+imwrite(frame2im(frame_pc), fullfile(analysis_dir, 'pc.png'));
+close(g);
+combined_mask = squeeze(sum(mask_int, 1));
+h = figure; imshow(imoverlay(rescale(pc_int(:,:,1)), combined_mask(:,:,1)), []);
+frame_pc_mask = getframe(h);
+imwrite(frame2im(frame_pc_mask), fullfile(analysis_dir, 'pc_mask.png'));
+close(h);
+
+
+%% Calculating flow
 % flow_quest = questdlg("Load flow data?");
 % switch flow_quest
 %     case "Yes"
 %         load(fullfile(pc_data_dir, 'flows.mat'), 'flow');
 %     case "No"
-        %% Calculating flow
-        disp("Calculating flow...")
-        flow = zeros(num_roi, desiredFrames);
-        for j=1:num_roi
-            for i=1:desiredFrames
-                ROI = imbinarize(mask_int(j,:,:,i));
-                vTemp = pc_int(:,:,i); %single frame velocities (mm/s)
-                ROIindex = double(vTemp(ROI)); %indexed velocities within mask
-                vMean = mean(ROIindex); %mean velocity in frame i (mm/s)
-                flow(j, i) = area_int(j, i).*vMean.*0.001; %flow in frame i (mL/s)
-            end
-        end
-        save(fullfile(pc_data_folder, 'flows.mat'), 'flow');
-        disp('Flow data saved')
+        
+disp("Calculating flow...")
+flow = zeros(num_roi, desiredFrames);
+for j=1:num_roi
+    for i=1:desiredFrames
+        ROI = imbinarize(mask_int(j,:,:,i));
+        vTemp = pc_int(:,:,i); %single frame velocities (mm/s)
+        ROIindex = double(vTemp(ROI)); %indexed velocities within mask
+        vMean = mean(ROIindex); %mean velocity in frame i (mm/s)
+        flow(j, i) = area_int(j, i).*vMean.*0.001; %flow in frame i (mL/s)
+    end
+end
+save(fullfile(pc_data_folder, 'flows.mat'), 'flow');
+disp('Flow data saved')
 %     case "Cancel"
 %         return
 % end
@@ -456,8 +443,10 @@ while ~flag
         plot(circshift(flow(1, :), shift));
     end
     title("Shift flow curve")
+    xlabel("Time (ms)")
+    ylabel("Flow (mL/s)")
     % movegui(f, 'west');
-    answer = inputdlg({"Enter shift amount:", "Accept? (enter 1)"}, "Velocity curve shift", ...
+    answer = inputdlg({"Enter shift amount (ms):", "Accept? (enter 1)"}, "Velocity curve shift", ...
         [1 30; 1 30], {num2str(shift), num2str(flag)}, options);
     shift = str2double(answer{1});
     flag = str2double(answer{2});
@@ -558,7 +547,7 @@ for j=1:num_roi
 end
 
 % Initialize array for Excel file
-results = cell(num_roi+1, 6);
+results = cell(num_roi+2, 6);
 results{1, 1} = 'ROI';
 results{1, 2} = 'PWV (m/s)';
 if sys_flag
@@ -570,7 +559,6 @@ if sys_flag
     results{2, 7} = pcHR;
 end
 
-% save to Excel file
 for j = 1:num_roi
     results{j+1, 1} = j;
     results{j+1, 2} = PWV(j);
@@ -582,7 +570,22 @@ for j = 1:num_roi
     end
 end
 
+results2 = cell(desiredFrames+1,1+2*num_roi);
+results2{1, 1} = 'Time (ms)';
+for i=1:desiredFrames
+    results2{i+1, 1} = timesInterp(i);
+end
+for j = 1:num_roi
+    results2{1, 2*j} = sprintf('ROI%d Area (mm^2)', j);
+    results2{1, 2*j+1} = sprintf('ROI%d Flow (mL/s)', j);
+    for i = 1:desiredFrames
+        results2{i+1, 2*j} = area_int(j, i);
+        results2{i+1, 2*j+1} = flow(j, i);
+    end
+end
+
 writecell(results, fullfile(analysis_dir, 'results.xlsx'))
+writecell(results2, fullfile(analysis_dir, 'results.xlsx'), 'WriteMode', 'append')
 disp("( つ ◕_◕ )つ PWV-QA Data Saved! ( つ ◕_◕ )つ")
 
 
