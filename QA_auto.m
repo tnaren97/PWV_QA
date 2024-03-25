@@ -105,7 +105,21 @@ switch answer
         load(fullfile(mask_path, mask_file));
         load(fullfile(mask_path, 'crop.mat'))
         load(fullfile(mask_path, 'areas.mat'))
-        needsMask = 0;
+        if size(masks_saved,2) < bssfpFrames
+            needsMask = 1;
+            currFrame = size(masks_saved,2);
+        else
+            needsMask = 0;
+            currFrame = bssfpFrames;
+        end
+        mask = zeros(num_roi, bssfpHeight, bssfpWidth, bssfpFrames);
+        area = zeros(num_roi,bssfpFrames);
+        for i=1:currFrame
+            for j=1:num_roi
+                mask(j,:,:,i) = masks_saved{j, i};
+                area(j, i) = areas_saved{j, i};
+            end
+        end
 
     case 'No'
         % Zoom in Manually
@@ -114,10 +128,12 @@ switch answer
         crop = round([rect.Position(2), rect.Position(2)+rect.Position(4), rect.Position(1), rect.Position(1)+rect.Position(3)]);
         save(fullfile(bssfp_data_folder, 'crop.mat'), 'crop')
         close all;
-
+        needsMask = 1;
+        currFrame = 1;
+        masks_saved = cell(num_roi, 1);
+        areas_saved = cell(num_roi, 1);
         mask = zeros(num_roi, bssfpHeight, bssfpWidth, bssfpFrames);
         area = zeros(num_roi, bssfpFrames);
-        needsMask = 1;
 
     case 'Cancel'
         return
@@ -128,7 +144,7 @@ radrange = [10 30]; % radius range for Hough Transform
 sens = 0.8; % sensitivity of circle find
 %% Segment Each Frame Separately
 if needsMask % if we haven't loaded in the mask...
-    for i=1:bssfpFrames
+    for i=currFrame:bssfpFrames
         fprintf("Frame %d\n", i)
         image = bssfp(crop(1):crop(2),crop(3):crop(4),i);
         % image = rescale(image);
@@ -154,23 +170,31 @@ if needsMask % if we haven't loaded in the mask...
                 [BW, centers, radii, radrange, sens] = circleFinder(image, num_roi, radrange, sens);
             case 'hough+contours' % Hough Transform + Active Countours
                 [BW, centers, radii, radrange, sens] = circleFinder(image, num_roi, radrange, sens);
-                BW = imdilate(BW,strel('disk',2)); %dilate so active contours pulls in segmentation
-                iters = 300;
-                smF = 5;
-                contrF = 0.2; %bias towards shrinking
-                method = 'Chan-Vese'; %or Chan-Vese (default)
-                BW = activecontour(image,BW,iters,method,'SmoothFactor',smF,'ContractionBias',contrF);
-                BW = imdilate(BW,strel('disk',1));
+                try
+                    BW = imdilate(BW,strel('disk',2)); %dilate so active contours pulls in segmentation
+                    iters = 300;
+                    smF = 5;
+                    contrF = 0.2; %bias towards shrinking
+                    method = 'Chan-Vese'; %or Chan-Vese (default)
+                    BW = activecontour(image,BW,iters,method,'SmoothFactor',smF,'ContractionBias',contrF);
+                    BW = imdilate(BW,strel('disk',1));
+                catch
+                    disp('Active contours failed, continuing with circle mask');
+                end
             case 'edge+hough+contours' % Hough Transform + Active Countours
                 grad = rescale(imgradient(image));
                 [BW, centers, radii, radrange, sens] = circleFinder(image, num_roi, radrange, sens);
-                BW = imerode(BW,strel('disk',2)); %erode so active contours pushes out
-                iters = 300;
-                smF = 5;
-                contrF = -0.1; %bias towards growing
-                method = 'Chan-Vese'; %or Chan-Vese (default)
-                BW = activecontour(grad,BW,iters,method,'SmoothFactor',smF,'ContractionBias',contrF);
-                BW = imdilate(BW,strel('disk',1));
+                try
+                    BW = imerode(BW,strel('disk',2)); %erode so active contours pushes out
+                    iters = 300;
+                    smF = 5;
+                    contrF = -0.1; %bias towards growing
+                    method = 'Chan-Vese'; %or Chan-Vese (default)
+                    BW = activecontour(grad,BW,iters,method,'SmoothFactor',smF,'ContractionBias',contrF);
+                    BW = imdilate(BW,strel('disk',1));
+                catch
+                    disp('Active contours failed, continuing with circle mask');
+                end
             case 'circle+contours'
                 f=figure; imshow(image,[]); 
                 circle = drawcircle();
@@ -181,18 +205,21 @@ if needsMask % if we haven't loaded in the mask...
                 X = X-center(2); %shift coordinate grid
                 Y = Y-center(1);
                 BW = sqrt(X.^2 + Y.^2)<=radius; %anything outside radius is ignored
-                BW = imdilate(BW,strel('disk',2)); %dilate so active contours pulls in segmentation
-                iters = 100;
-                smF = 5;
-                contrF = 0.1; %bias towards shrinking
-                method = 'Chan-Vese'; %or Chan-Vese (default)
-                BW = activecontour(image,BW,iters,method,'SmoothFactor',smF,'ContractionBias',contrF);
-                BW = imdilate(BW,strel('disk',1));
+                try
+                    BW = imdilate(BW,strel('disk',2)); %dilate so active contours pulls in segmentation
+                    iters = 100;
+                    smF = 5;
+                    contrF = 0.1; %bias towards shrinking
+                    method = 'Chan-Vese'; %or Chan-Vese (default)
+                    BW = activecontour(image,BW,iters,method,'SmoothFactor',smF,'ContractionBias',contrF);
+                    BW = imdilate(BW,strel('disk',1));
+                catch
+                    disp('Active contours failed, continuing with circle mask');
+                end
             otherwise
                 disp("Invalid segmentation choice!")
                 return
         end
-        
 
         % Freehand ROI conversion
         blocations = bwboundaries(BW,'noholes');
@@ -236,11 +263,15 @@ if needsMask % if we haven't loaded in the mask...
             vessel = padarray(vessel, [bssfpHeight-crop(2)-1 bssfpWidth-crop(4)-1], 'post');
             mask(j,:,:,i) = vessel;
             area(j, i) = sum(vessel(:))*pixelArea; % mm^2
+            masks_saved{j, i} = mask(j,:,:,i);
+            areas_saved{j, i} = area(j, i);
         end
         close all
+        save(fullfile(bssfp_data_folder, 'masks.mat'), 'masks_saved');
+        save(fullfile(bssfp_data_folder, 'areas.mat'), 'areas_saved');
     end
-    save(fullfile(bssfp_data_folder, 'masks.mat'), 'mask');
-    save(fullfile(bssfp_data_folder, 'areas.mat'), 'area');
+    % save(fullfile(bssfp_data_folder, 'masks.mat'), 'mask');
+    % save(fullfile(bssfp_data_folder, 'areas.mat'), 'area');
     disp('Mask and Area Data Saved');
 end
 
@@ -484,8 +515,9 @@ for j=1:num_roi
     earlySystoleTimes_int = pcmrTimes_int(earlySystolePts_int);
     earlySystolePts = ismember(earlySystoleTimes_int, pcmrTimes);
     earlySystoleTimes = earlySystoleTimes_int(earlySystolePts);
+    delete(free);
     saveas(flow_plot, fullfile(analysis_dir, sprintf('flowplot_ROI_%d', j)));
-    delete(free); close(flow_plot); clear flow_plot;
+    close(flow_plot); clear flow_plot;
 
     if sys_flag
         %Define Systolic Region
