@@ -13,15 +13,15 @@ list_options = {'kmeans','otsu','circle+contours','hough','hough+contours','edge
 [choice, tf] = listdlg('ListString', list_options, 'InitialValue', 5, 'PromptString', "Choose a segmentation method", 'SelectionMode', 'single');
 segType = list_options{choice};
 
-cardiac_answer = questdlg("Do cardiac output analysis?");
-switch cardiac_answer
-    case "Yes"
-        sys_flag = 1;
-    case "No"
-        sys_flag = 0;
-    case "Cancel"
-        sys_flag = 0;
-end
+% cardiac_answer = questdlg("Do cardiac output analysis?");
+% switch cardiac_answer
+%     case "Yes"
+%         sys_flag = 1;
+%     case "No"
+%         sys_flag = 0;
+%     case "Cancel"
+%         sys_flag = 0;
+% end
 
 % plane = 'asc';
 % segType = 'hough+contours';
@@ -496,8 +496,7 @@ end
 %% Compute PWV
 disp("Calculating PWV...")
 PWV = zeros(num_roi, 1);
-ESV = zeros(num_roi, 1);
-EDV = zeros(num_roi, 1);
+SV = zeros(num_roi, 1);
 
 flow_calc = flow;
 for j=1:num_roi
@@ -518,30 +517,31 @@ for j=1:num_roi
     delete(free);
     saveas(flow_plot, fullfile(analysis_dir, sprintf('flowplot_ROI_%d', j)));
     close(flow_plot); clear flow_plot;
+    SV(j) = trapz(flow_calc(j, systolePts));
 
-    if sys_flag
-        %Define Systolic Region
-        figure; plot(flow_calc(j, :)); 
-        title(sprintf('%s: ROI %d - Systole', plane, j)); xlabel('Time (ms)'); ylabel('Flow (mL/s)');
-        disp("Draw around the systole portion of the flow curve")
-        flow_plot = gcf;
-        free = drawfreehand;
-        systolePts = find(inpolygon(linspace(1,length(flow_calc(j, :)),length(flow_calc(j, :))),flow_calc(j, :),free.Position(:,1),free.Position(:,2)));
-        systoleTimes = pcmrTimes_int(systolePts);
-        delete(free); close(flow_plot); clear flow_plot;
-        ESV(j) = trapz(systoleTimes*0.001, flow_calc(j, systolePts));
-
-        %Define Diastolic Region
-        figure; plot(flow_calc(j, :)); 
-        title(sprintf('%s: ROI %d - Diastole', plane, j)); xlabel('Time (ms)'); ylabel('Flow (mL/s)');
-        disp("Draw around the diastole portion of the flow curve")
-        flow_plot = gcf;
-        free = drawfreehand;
-        diastolePts = find(inpolygon(linspace(1,length(flow_calc(j, :)),length(flow_calc(j, :))),flow_calc(j, :),free.Position(:,1),free.Position(:,2)));
-        diastoleTimes = pcmrTimes_int(diastolePts);
-        delete(free); close(flow_plot); clear flow_plot;
-        EDV(j) = trapz(diastoleTimes*0.001, flow_calc(j, diastolePts));
-    end
+    % if sys_flag
+    %     %Define Systolic Region
+    %     figure; plot(flow_calc(j, :)); 
+    %     title(sprintf('%s: ROI %d - Systole', plane, j)); xlabel('Time (ms)'); ylabel('Flow (mL/s)');
+    %     disp("Draw around the systole portion of the flow curve")
+    %     flow_plot = gcf;
+    %     free = drawfreehand;
+    %     systolePts = find(inpolygon(linspace(1,length(flow_calc(j, :)),length(flow_calc(j, :))),flow_calc(j, :),free.Position(:,1),free.Position(:,2)));
+    %     systoleTimes = pcmrTimes_int(systolePts);
+    %     delete(free); close(flow_plot); clear flow_plot;
+    %     ESV(j) = trapz(systoleTimes*0.001, flow_calc(j, systolePts));
+    % 
+    %     %Define Diastolic Region
+    %     figure; plot(flow_calc(j, :)); 
+    %     title(sprintf('%s: ROI %d - Diastole', plane, j)); xlabel('Time (ms)'); ylabel('Flow (mL/s)');
+    %     disp("Draw around the diastole portion of the flow curve")
+    %     flow_plot = gcf;
+    %     free = drawfreehand;
+    %     diastolePts = find(inpolygon(linspace(1,length(flow_calc(j, :)),length(flow_calc(j, :))),flow_calc(j, :),free.Position(:,1),free.Position(:,2)));
+    %     diastoleTimes = pcmrTimes_int(diastolePts);
+    %     delete(free); close(flow_plot); clear flow_plot;
+    %     EDV(j) = trapz(diastoleTimes*0.001, flow_calc(j, diastolePts));
+    % end
     
     %Define Linear QA Region (flow vs. area)
     % x = area_int(j, earlySystolePts_int);
@@ -568,8 +568,6 @@ for j=1:num_roi
     PWV(j) = coef(1); % m/s
     fprintf('    ROI %d PWV_QA = %.4f m/s\n', j, PWV(j));
     if sys_flag
-        fprintf('    ROI %d End Systolic Volume = %.4f mL\n', j, ESV(j));
-        fprintf('    ROI %d End Diastolic Volume = %.4f mL\n', j, EDV(j));
         fprintf('    ROI %d Stroke Volume = %.4f mL\n', j, EDV(j) - ESV(j));
         fprintf('    ROI %d Cardiac Output = %.4f (mL/min)\n', j, (EDV(j) - ESV(j))*pcHR);
     end
@@ -583,22 +581,18 @@ results = cell(num_roi+2, 6);
 results{1, 1} = 'ROI';
 results{1, 2} = 'PWV (m/s)';
 if sys_flag
-    results{1, 3} = 'End Systolic Volume (mL)';
-    results{1, 4} = 'End Diastolic Volume (mL)';
-    results{1, 5} = 'Stroke Volume (mL)';
-    results{1, 6} = 'Cardiac Output (mL/min)';
-    results{1, 7} = 'Mean HR (bpm)';
-    results{2, 7} = pcHR;
+    results{1, 3} = 'Stroke Volume (mL)';
+    results{1, 4} = 'Cardiac Output (mL/min)';
+    results{1, 5} = 'Mean HR (bpm)';
+    results{2, 5} = pcHR;
 end
 
 for j = 1:num_roi
     results{j+1, 1} = j;
     results{j+1, 2} = PWV(j);
     if sys_flag
-        results{j+1, 3} = ESV(j);
-        results{j+1, 4} = EDV(j);
-        results{j+1, 5} = EDV(j) - ESV(j);
-        results{j+1, 6} = (EDV(j) - ESV(j)) * pcHR;
+        results{j+1, 3} = SV(j);
+        results{j+1, 4} = SV(j) * pcHR;
     end
 end
 
