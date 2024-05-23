@@ -567,10 +567,8 @@ for j=1:num_roi
     QAplot = gcf; 
     PWV(j) = coef(1); % m/s
     fprintf('    ROI %d PWV_QA = %.4f m/s\n', j, PWV(j));
-    if sys_flag
-        fprintf('    ROI %d Stroke Volume = %.4f mL\n', j, EDV(j) - ESV(j));
-        fprintf('    ROI %d Cardiac Output = %.4f (mL/min)\n', j, (EDV(j) - ESV(j))*pcHR);
-    end
+    fprintf('    ROI %d Stroke Volume = %.4f mL\n', j, SV(j));
+    fprintf('    ROI %d Cardiac Output = %.4f (mL/min)\n', j, SV(j)*pcHR);
     saveas(QAplot,fullfile(analysis_dir, sprintf('QAplot_ROI_%d', j)));
     save(fullfile(analysis_dir, sprintf('coef_ROI_%d.mat', j)), 'coef');
     save(fullfile(analysis_dir, sprintf('stats_ROI_%d.mat', j)), 'stats');
