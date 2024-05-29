@@ -45,6 +45,59 @@ if ~exist(analysis_dir,'dir')
 end
 disp("Created analysis folder")
 
+%% Load 2DPC
+
+pc_data_folder = fullfile(result_dir, plane, 'pc');
+if ~exist(pc_data_folder,'dir')
+    mkdir(pc_data_folder);
+end
+disp("Loading 2DPC data...")
+if ~exist(fullfile(pc_data_folder, 'pc.mat'),'file')
+    disp("Select 2DPC scan folder")
+    pc_folder = uigetdir(pwd,'Select 2DPC scan folder');
+    % pc_folder = 'D:\PWV\vol_Tarun\standard\008_PWV_CartBH_AAo_NOPROSP_4VPS_40FRAMES';
+    dirFiles = dir(fullfile(pc_folder, '*.dcm'));
+    if isempty(dirFiles) %check if dicoms are zipped
+        zipFiles = dir(fullfile(pc_folder, '*.tgz'));
+        if isempty(zipFiles)
+            disp('NO READABLE DICOMS OR TGZ FILE FOUND, TRY ANOTHER FOLDER');
+        else
+            gunzip(fullfile(pc_folder, '*.tgz'), 'Dicoms'); %unzip first
+            dd = dir(fullfile(pc_folder, 'Dicoms')); %get the name of the only file in the new dir
+            untar(dd(3).name,'Dicoms'); %untar that file
+            movefile(fullfile(bssfp_folder, 'Dicoms/*'), bssfp_folder); %move unzipped files back up
+            rmdir(fullfile(bssfp_folder, 'Dicoms'),'s') %get rid of created dummy unzipping folder
+        end 
+    end 
+    
+    pcInfo = dicominfo(fullfile(dirFiles(1).folder, dirFiles(1).name)); %grab dicom info from 1st frame
+    pcHeight = double(pcInfo.Height);
+    pcWidth = double(pcInfo.Width);
+    pcFrames = pcInfo.CardiacNumberOfImages;
+    pcHR = pcInfo.HeartRate; % bpm
+    pcmr = zeros(pcHeight,pcWidth,pcFrames);
+    for f=1:length(dirFiles)
+        pcmr(:,:,f) = dicomread(fullfile(dirFiles(f).folder, dirFiles(f).name));
+        temp = dicominfo(fullfile(dirFiles(f).folder, dirFiles(f).name));
+        pcmrTimes(f) = temp.TriggerTime;
+    end
+    pc = pcmr(:,:,1:pcFrames);
+    mag = pcmr(:,:,(pcFrames+1):end);
+    pcmrTimes = pcmrTimes(1:pcFrames);
+    save(fullfile(pc_data_folder, 'pc.mat'), 'pc');
+    save(fullfile(pc_data_folder, 'mag.mat'), 'mag');
+    save(fullfile(pc_data_folder, 'pcmrTimes.mat'), 'pcmrTimes');
+    save(fullfile(pc_data_folder, 'pcInfo.mat'), 'pcInfo');
+else
+    load(fullfile(pc_data_folder, 'pc.mat'));
+    load(fullfile(pc_data_folder, 'mag.mat'));
+    load(fullfile(pc_data_folder, 'pcmrTimes.mat'))
+    load(fullfile(pc_data_folder, 'pcInfo.mat'));
+    pcHeight = double(pcInfo.Height);
+    pcWidth = double(pcInfo.Width);
+    pcFrames = pcInfo.CardiacNumberOfImages;
+    pcHR = pcInfo.HeartRate; % bpm
+end
 
 %% Load BSSFP
 bssfp_data_folder = fullfile(result_dir, plane, 'bssfp');
@@ -275,60 +328,6 @@ if needsMask % if we haven't loaded in the mask...
     disp('Mask and Area Data Saved');
 end
 
-%% Load 2DPC
-
-pc_data_folder = fullfile(result_dir, plane, 'pc');
-if ~exist(pc_data_folder,'dir')
-    mkdir(pc_data_folder);
-end
-disp("Loading 2DPC data...")
-if ~exist(fullfile(pc_data_folder, 'pc.mat'),'file')
-    disp("Select 2DPC scan folder")
-    pc_folder = uigetdir(pwd,'Select 2DPC scan folder');
-    % pc_folder = 'D:\PWV\vol_Tarun\standard\008_PWV_CartBH_AAo_NOPROSP_4VPS_40FRAMES';
-    dirFiles = dir(fullfile(pc_folder, '*.dcm'));
-    if isempty(dirFiles) %check if dicoms are zipped
-        zipFiles = dir(fullfile(pc_folder, '*.tgz'));
-        if isempty(zipFiles)
-            disp('NO READABLE DICOMS OR TGZ FILE FOUND, TRY ANOTHER FOLDER');
-        else
-            gunzip(fullfile(pc_folder, '*.tgz'), 'Dicoms'); %unzip first
-            dd = dir(fullfile(pc_folder, 'Dicoms')); %get the name of the only file in the new dir
-            untar(dd(3).name,'Dicoms'); %untar that file
-            movefile(fullfile(bssfp_folder, 'Dicoms/*'), bssfp_folder); %move unzipped files back up
-            rmdir(fullfile(bssfp_folder, 'Dicoms'),'s') %get rid of created dummy unzipping folder
-        end 
-    end 
-    
-    pcInfo = dicominfo(fullfile(dirFiles(1).folder, dirFiles(1).name)); %grab dicom info from 1st frame
-    pcHeight = double(pcInfo.Height);
-    pcWidth = double(pcInfo.Width);
-    pcFrames = pcInfo.CardiacNumberOfImages;
-    pcHR = pcInfo.HeartRate; % bpm
-    pcmr = zeros(pcHeight,pcWidth,pcFrames);
-    for f=1:length(dirFiles)
-        pcmr(:,:,f) = dicomread(fullfile(dirFiles(f).folder, dirFiles(f).name));
-        temp = dicominfo(fullfile(dirFiles(f).folder, dirFiles(f).name));
-        pcmrTimes(f) = temp.TriggerTime;
-    end
-    pc = pcmr(:,:,1:pcFrames);
-    mag = pcmr(:,:,(pcFrames+1):end);
-    pcmrTimes = pcmrTimes(1:pcFrames);
-    save(fullfile(pc_data_folder, 'pc.mat'), 'pc');
-    save(fullfile(pc_data_folder, 'mag.mat'), 'mag');
-    save(fullfile(pc_data_folder, 'pcmrTimes.mat'), 'pcmrTimes');
-    save(fullfile(pc_data_folder, 'pcInfo.mat'), 'pcInfo');
-else
-    load(fullfile(pc_data_folder, 'pc.mat'));
-    load(fullfile(pc_data_folder, 'mag.mat'));
-    load(fullfile(pc_data_folder, 'pcmrTimes.mat'))
-    load(fullfile(pc_data_folder, 'pcInfo.mat'));
-    pcHeight = double(pcInfo.Height);
-    pcWidth = double(pcInfo.Width);
-    pcFrames = pcInfo.CardiacNumberOfImages;
-    pcHR = pcInfo.HeartRate; % bpm
-end
-
 
 %% Make temporal resolutions equivalent
 % desiredFrames = max(bssfpFrames, pcFrames);
@@ -517,7 +516,7 @@ for j=1:num_roi
     delete(free);
     saveas(flow_plot, fullfile(analysis_dir, sprintf('flowplot_ROI_%d', j)));
     close(flow_plot); clear flow_plot;
-    SV(j) = trapz(flow_calc(j, systolePts));
+    SV(j) = trapz(flow_calc(j, earlySystolePts));
 
     % if sys_flag
     %     %Define Systolic Region
