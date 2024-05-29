@@ -577,20 +577,16 @@ end
 results = cell(num_roi+2, 6);
 results{1, 1} = 'ROI';
 results{1, 2} = 'PWV (m/s)';
-if sys_flag
-    results{1, 3} = 'Stroke Volume (mL)';
-    results{1, 4} = 'Cardiac Output (mL/min)';
-    results{1, 5} = 'Mean HR (bpm)';
-    results{2, 5} = pcHR;
-end
+results{1, 3} = 'Stroke Volume (mL)';
+results{1, 4} = 'Cardiac Output (mL/min)';
+results{1, 5} = 'Mean HR (bpm)';
+results{2, 5} = pcHR;
 
 for j = 1:num_roi
     results{j+1, 1} = j;
     results{j+1, 2} = PWV(j);
-    if sys_flag
-        results{j+1, 3} = SV(j);
-        results{j+1, 4} = SV(j) * pcHR;
-    end
+    results{j+1, 3} = SV(j);
+    results{j+1, 4} = SV(j) * pcHR;
 end
 
 results2 = cell(desiredFrames+1,1+2*num_roi);
