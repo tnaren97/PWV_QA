@@ -178,6 +178,9 @@ if needsMask % if we haven't loaded in the mask...
                     method = 'Chan-Vese'; %or Chan-Vese (default)
                     BW = activecontour(image,BW,iters,method,'SmoothFactor',smF,'ContractionBias',contrF);
                     BW = imdilate(BW,strel('disk',1));
+                    if sum(BW) == 0
+                        error('');
+                    end
                 catch
                     disp('Active contours failed, continuing with circle mask');
                 end
@@ -192,6 +195,9 @@ if needsMask % if we haven't loaded in the mask...
                     method = 'Chan-Vese'; %or Chan-Vese (default)
                     BW = activecontour(grad,BW,iters,method,'SmoothFactor',smF,'ContractionBias',contrF);
                     BW = imdilate(BW,strel('disk',1));
+                    if sum(BW) == 0
+                        error('');
+                    end
                 catch
                     disp('Active contours failed, continuing with circle mask');
                 end
@@ -213,6 +219,9 @@ if needsMask % if we haven't loaded in the mask...
                     method = 'Chan-Vese'; %or Chan-Vese (default)
                     BW = activecontour(image,BW,iters,method,'SmoothFactor',smF,'ContractionBias',contrF);
                     BW = imdilate(BW,strel('disk',1));
+                    if sum(BW) == 0
+                        error('Active contours failed, continuing with circle mask');
+                    end
                 catch
                     disp('Active contours failed, continuing with circle mask');
                 end
