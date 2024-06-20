@@ -81,6 +81,8 @@ if ~exist(fullfile(pc_data_folder, 'pc.mat'),'file')
         temp = dicominfo(fullfile(dirFiles(f).folder, dirFiles(f).name));
         pcmrTimes(f) = temp.TriggerTime;
     end
+    pc = pcmr(:,:,1:pcFrames);
+    mag = pcmr(:,:,(pcFrames+1):end);
     pcmrTimes = pcmrTimes(1:pcFrames);
     save(fullfile(pc_data_folder, 'pc.mat'), 'pc');
     save(fullfile(pc_data_folder, 'mag.mat'), 'mag');
@@ -99,8 +101,8 @@ else
 end
 
 scale = 2;
-pc = imresize(pcmr(:,:,1:pcFrames), scale);
-mag = imresize(pcmr(:,:,(pcFrames+1):end), scale);
+pc = imresize(pc, scale);
+mag = imresize(mag, scale);
 pcHeight = pcHeight * scale;
 pcWidth = pcWidth * scale;
 pixelArea = pixelArea * scale * 2;
@@ -305,9 +307,9 @@ close(h);
 %     case "No"
         
 disp("Calculating flow...")
-flow = zeros(num_roi, desiredFrames);
+flow = zeros(num_roi, pcFrames);
 for j=1:num_roi
-    for i=1:desiredFrames
+    for i=1:pcFrames
         ROI = imbinarize(mask(j,:,:,i));
         vTemp = pc(:,:,i); %single frame velocities (mm/s)
         ROIindex = double(vTemp(ROI)); %indexed velocities within mask
@@ -371,14 +373,14 @@ for j=1:num_roi
     flow_plot = gcf;
     free = drawfreehand;
     earlySystolePts = find(inpolygon(linspace(1,length(flow_calc(j, :)),length(flow_calc(j, :))),flow_calc(j, :),free.Position(:,1),free.Position(:,2)));
-    earlySystoleTimes = pcmrTimes(earlySystolePts_int);
+    earlySystoleTimes = pcmrTimes(earlySystolePts);
     delete(free);
     saveas(flow_plot, fullfile(analysis_dir, sprintf('flowplot_ROI_%d', j)));
     close(flow_plot); clear flow_plot;
     SV(j) = trapz(flow_calc(j, earlySystolePts));
     
     %Define Linear QA Region (flow vs. area)
-    x = area_int(j, earlySystolePts);
+    x = area(j, earlySystolePts);
     y = flow_calc(j, earlySystolePts);
     figure; scatter(x,y); 
     title(sprintf('%s: ROI %d - QA Plot', plane, j)); xlabel('Area (mm^2)'); ylabel('Flow (mL/s)');
@@ -422,16 +424,16 @@ for j = 1:num_roi
     results{j+1, 4} = SV(j) * pcHR;
 end
 
-results2 = cell(desiredFrames+1,1+2*num_roi);
+results2 = cell(pcFrames+1,1+2*num_roi);
 results2{1, 1} = 'Time (ms)';
-for i=1:desiredFrames
-    results2{i+1, 1} = timesInterp(i);
+for i=1:pcFrames
+    results2{i+1, 1} = pcmrTimes(i);
 end
 for j = 1:num_roi
     results2{1, 2*j} = sprintf('ROI%d Area (mm^2)', j);
     results2{1, 2*j+1} = sprintf('ROI%d Flow (mL/s)', j);
-    for i = 1:desiredFrames
-        results2{i+1, 2*j} = area_int(j, i);
+    for i = 1:pcFrames
+        results2{i+1, 2*j} = area(j, i);
         results2{i+1, 2*j+1} = flow(j, i);
     end
 end
