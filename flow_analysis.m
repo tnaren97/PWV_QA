@@ -88,16 +88,26 @@ switch dataType
         %% Load H5
         disp("Select HDF5 file")
         [h5_file, h5_dir] = uigetfile('*.h5', pwd, 'Select .h5 file');
-        
-        width = double(h5readatt(fullfile(h5_dir, h5_file), "/HEADER", "matrixx"));
-        height = double(h5readatt(fullfile(h5_dir, h5_file), "/HEADER", "matrixy"));
-        frames = h5readatt(fullfile(h5_dir, h5_file), "/HEADER", "frames");
-        venc = h5readatt(fullfile(h5_dir, h5_file), "/HEADER", "venc");
-        pixelArea = h5readatt(fullfile(h5_dir, h5_file), "/HEADER", "fovx");
-        timeRes = h5readatt(fullfile(h5_dir, h5_file), "/HEADER", "time_res");
-        pcmrTimes = double(timeRes.*(0:(frames-1)));
         mag = flip(squeeze(h5read(fullfile(h5_dir, h5_file), "/MAG")));
         pc = flip(squeeze(h5read(fullfile(h5_dir, h5_file), "/VZ")));
+        try
+            width = double(h5readatt(fullfile(h5_dir, h5_file), "/HEADER", "matrixx"));
+            height = double(h5readatt(fullfile(h5_dir, h5_file), "/HEADER", "matrixy"));
+            frames = h5readatt(fullfile(h5_dir, h5_file), "/HEADER", "frames");
+            venc = h5readatt(fullfile(h5_dir, h5_file), "/HEADER", "venc");
+            fovx = h5readatt(fullfile(h5_dir, h5_file), "/HEADER", "fovx");
+            timeRes = h5readatt(fullfile(h5_dir, h5_file), "/HEADER", "time_res");
+        catch 
+            disp("ERROR: reading h5 header failed, attributes manually set. Please adjust values in code.")
+            width = size(mag, 1);
+            height = size(mag, 2);
+            frames = size(mag, 3);
+            venc = 80;
+            fovx = 320;
+            timeRes = 30;
+        end
+        pixelArea = fovx/width;
+        pcmrTimes = double(timeRes.*(0:(frames-1)));
 end
 tavg_mag = mean(mag, 3);
 
