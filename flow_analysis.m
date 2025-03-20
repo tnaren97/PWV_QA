@@ -10,16 +10,12 @@ num_roi = inputdlg("Type in the number of ROIs in plane");
 num_roi = str2num(num_roi{1});
 
 list_options = {'kmeans','otsu','hough','hough+contours','edge+hough+contours', 'circle+contours', 'manual'};
-[choice, tf] = listdlg('ListString', list_options, 'InitialValue', 4, 'PromptString', "Choose a segmentation method", 'SelectionMode', 'single');
+[choice, tf] = listdlg('ListString', list_options, 'InitialValue', 7, 'PromptString', "Choose a segmentation method", 'SelectionMode', 'single');
 segType = list_options{choice};
 
 data_options = {'dicom', 'dat', 'hdf5'};
-[data_choice, data_tf] = listdlg('ListString', data_options, 'InitialValue', 1, 'PromptString', "Choose a input data type", 'SelectionMode', 'single');
+[data_choice, data_tf] = listdlg('ListString', data_options, 'InitialValue', 3, 'PromptString', "Choose a input data type", 'SelectionMode', 'single');
 dataType = data_options{data_choice};
-
-% plane = 'asc';
-% segType = 'hough+contours';
-% num_roi = 2;
 
 date = string(datetime('now', 'Format', 'yyyy-MM-dd-HHmm'));
 
@@ -33,7 +29,6 @@ else
     end
 end
 
-% save_loc = 'D:\PWV\vol_Tarun';
 plane_dir = fullfile(result_dir, plane);
 modal_dir = fullfile(plane_dir, dataType);
 analysis_dir = fullfile(modal_dir, strcat(segType, '_', date));
@@ -48,6 +43,11 @@ data_dir = fullfile(modal_dir, "data");
 if ~exist(data_dir, 'dir')
     mkdir(data_dir)
 end
+
+% manual controls for now
+seg_cd = 0;
+time_flag = 0;
+time_control = [0, 120]; 
 
 switch dataType
     case 'dicom'
@@ -69,6 +69,7 @@ switch dataType
         timeRes = frames/max(pcmrTimes);
         pc = images(:,:,1:frames);
         mag = images(:,:,frames+1:end);
+        rrinterval = 60/dicomInfo.HeartRate; % seconds
 
     case 'dat'
         disp("Select folder with dat files")
@@ -81,14 +82,28 @@ switch dataType
         pcmrTimes = double(timeRes.*(0:(frames-1)));
         venc = header.VENC;
         pixelArea = header.matrixx/header.fovx;
-        mag = flip(squeeze(binary_data.mag));
+        if seg_cd
+            mag = flip(squeeze(binary_data.cd));
+        else
+            mag = flip(squeeze(binary_data.mag));
+        end
         pc = flip(squeeze(binary_data.vel3));
+        disp("Select folder with gating tracks")
+        if time_flag
+            ecgData = importGating(uigetdir, time_control);
+        else
+            ecgData = importGating(uigetdir);
+        rrinterval = ecgData.gatingTrack.recon_rr/1000;
         
     case 'hdf5'
         %% Load H5
         disp("Select HDF5 file")
         [h5_file, h5_dir] = uigetfile('*.h5', pwd, 'Select .h5 file');
-        mag = flip(squeeze(h5read(fullfile(h5_dir, h5_file), "/MAG")));
+        if seg_cd
+            mag = flip(squeeze(h5read(fullfile(h5_dir, h5_file), "/CD")));
+        else
+            mag = flip(squeeze(h5read(fullfile(h5_dir, h5_file), "/MAG")));
+        end
         pc = flip(squeeze(h5read(fullfile(h5_dir, h5_file), "/VZ")));
         try
             width = double(h5readatt(fullfile(h5_dir, h5_file), "/HEADER", "matrixx"));
@@ -102,12 +117,18 @@ switch dataType
             width = size(mag, 1);
             height = size(mag, 2);
             frames = size(mag, 3);
-            venc = 80;
+            venc = 800;
             fovx = 320;
             timeRes = 30;
         end
         pixelArea = fovx/width;
-        pcmrTimes = double(timeRes.*(0:(frames-1)));
+        pcmrTimes = double(timeRes.*(1:frames));
+        disp("Select folder with gating tracks")
+        if time_flag
+            ecgData = importGating(uigetdir, time_control);
+        else
+            ecgData = importGating(uigetdir);
+        rrinterval = ecgData.gatingTrack.recon_rr/1000;
 end
 tavg_mag = mean(mag, 3);
 
@@ -159,6 +180,7 @@ radrange = [10 30]; % radius range for Hough Transform
 sens = 0.8; % sensitivity of circle find
 %% Segment Each Frame Separately
 if needsMask % if we haven't loaded in the mask...
+    next_circle = [];
     for i=currFrame:frames
         fprintf("Frame %d\n", i)
         image = mag(crop(1):crop(2),crop(3):crop(4),i);
@@ -217,17 +239,19 @@ if needsMask % if we haven't loaded in the mask...
                     disp('Active contours failed, continuing with circle mask');
                 end
             case 'circle+contours'
-                f=figure; imshow(image,[]); 
-                circle = drawcircle();
-                radius = circle.Radius; %get radius of circle
-                center = round(circle.Center); %get center coordinates
-                centers = center;
-                radii = radius;
-                close(f); delete(f);
-                [X,Y] = ndgrid(1:size(image,1),1:size(image,2));
-                X = X-center(2); %shift coordinate grid
-                Y = Y-center(1);
-                BW = sqrt(X.^2 + Y.^2)<=radius; %anything outside radius is ignored
+                if i == currFrame
+                    z=figure('Name', sprintf('Frame %d of %d', i, frames)); imshow(image,[]);
+                    circle = drawcircle();
+                    radius = circle.Radius; %get radius of circle
+                    center = round(circle.Center); %get center coordinates
+                    centers = center;
+                    radii = radius;
+                    close(z);
+                    [X,Y] = ndgrid(1:size(image,1),1:size(image,2));
+                    X = X-center(2); %shift coordinate grid
+                    Y = Y-center(1);
+                    BW = sqrt(X.^2 + Y.^2)<=radius; %anything outside radius is ignored
+                end
                 try
                     BW = imdilate(BW,strel('disk',2)); %dilate so active contours pulls in segmentation
                     iters = 100;
@@ -243,17 +267,19 @@ if needsMask % if we haven't loaded in the mask...
                     disp('Active contours failed, continuing with circle mask');
                 end
             case 'manual'
-                f=figure; imshow(image,[]); 
-                circle = drawcircle();
-                radius = circle.Radius; %get radius of circle
-                center = round(circle.Center); %get center coordinates
-                centers = center;
-                radii = radius;
-                close(f); delete(f);
-                [X,Y] = ndgrid(1:size(image,1),1:size(image,2));
-                X = X-center(2); %shift coordinate grid
-                Y = Y-center(1);
-                BW = sqrt(X.^2 + Y.^2)<=radius; %anything outside radius is ignored
+                if i == currFrame
+                    z=figure('Name', sprintf('Frame %d of %d', i, frames)); imshow(image,[]);
+                    circle = drawcircle();
+                    radius = circle.Radius; %get radius of circle
+                    center = round(circle.Center); %get center coordinates
+                    close(z);
+                    centers = center;
+                    radii = radius;
+                    [X,Y] = ndgrid(1:size(image,1),1:size(image,2));
+                    X = X-center(2); %shift coordinate grid
+                    Y = Y-center(1);
+                    BW = sqrt(X.^2 + Y.^2)<=radius; %anything outside radius is ignored
+                end
             otherwise
                 disp("Invalid segmentation choice!")
                 return
@@ -262,7 +288,7 @@ if needsMask % if we haven't loaded in the mask...
         % Freehand ROI conversion
         blocations = bwboundaries(BW,'noholes');
         numBlobs = numel(blocations);
-        f = figure;
+        f = figure('Name', sprintf('Frame %d of %d', i, frames));
         imshow(image, []);
         set(f,'WindowStyle','normal')
         f.WindowState = 'maximized';
@@ -377,10 +403,10 @@ while ~flag
         plot(circshift(flow(1, :), shift));
     end
     title("Shift flow curve")
-    xlabel("Time (ms)")
+    xlabel("Time (frames)")
     ylabel("Flow (mL/s)")
     % movegui(f, 'west');
-    answer = inputdlg({"Enter shift amount (ms):", "Accept? (enter 1)"}, "Velocity curve shift", ...
+    answer = inputdlg({"Enter shift amount (frames):", "Accept? (enter 1)"}, "Flow curve shift", ...
         [1 30; 1 30], {num2str(shift), num2str(flag)}, options);
     shift = str2double(answer{1});
     flag = str2double(answer{2});
@@ -409,87 +435,96 @@ for j=1:num_roi
     end
 
     %Define Early Systolic Region (flow vs. time)
-    figure; plot(flow_calc(j, :)); 
-    title(sprintf('%s: ROI %d - Early Systole', plane, j)); xlabel('Time (ms)'); ylabel('Flow (mL/s)');
-    disp("Draw around the early systole (upslope) portion of the flow curve")
-    flow_plot = gcf;
-    free = drawfreehand;
-    earlySystolePts = find(inpolygon(linspace(1,length(flow_calc(j, :)),length(flow_calc(j, :))),flow_calc(j, :),free.Position(:,1),free.Position(:,2)));
-    earlySystoleTimes = pcmrTimes(earlySystolePts);
-    earlySystolePts = ismember(earlySystoleTimes, pcmrTimes);
-    earlySystoleTimes = earlySystoleTimes(earlySystolePts);
-    delete(free);
-    saveas(flow_plot, fullfile(analysis_dir, sprintf('flowplot_ROI_%d', j)));
-    close(flow_plot); clear flow_plot;
-
-    % if sys_flag
-    %     %Define Systolic Region
-    %     figure; plot(flow_calc(j, :)); 
-    %     title(sprintf('%s: ROI %d - Systole', plane, j)); xlabel('Time (ms)'); ylabel('Flow (mL/s)');
-    %     disp("Draw around the systole portion of the flow curve")
-    %     flow_plot = gcf;
-    %     free = drawfreehand;
-    %     systolePts = find(inpolygon(linspace(1,length(flow_calc(j, :)),length(flow_calc(j, :))),flow_calc(j, :),free.Position(:,1),free.Position(:,2)));
-    %     systoleTimes = pcmrTimes_int(systolePts);
-    %     delete(free); close(flow_plot); clear flow_plot;
-    %     ESV(j) = trapz(systoleTimes*0.001, flow_calc(j, systolePts));
+    figure; plot(linspace(0, rrinterval*1000, frames), flow_calc(j, :)); 
+    title(sprintf('%s: ROI %d', plane, j), 'Interpreter', 'none'); xlabel('Time (ms)'); ylabel('Flow (mL/s)');
+    % disp("Draw around the early systole (upslope) portion of the flow curve")
+    % flow_plot = gcf;
+    % free = drawfreehand;
+    % earlySystolePts = find(inpolygon(linspace(1,length(flow_calc(j, :)),length(flow_calc(j, :))),flow_calc(j, :),free.Position(:,1),free.Position(:,2)));
+    % earlySystoleTimes = pcmrTimes(earlySystolePts);
+    % earlySystolePts = ismember(earlySystoleTimes, pcmrTimes);
+    % earlySystoleTimes = earlySystoleTimes(earlySystolePts);
+    % delete(free);
+    saveas(gcf, fullfile(analysis_dir, sprintf('flowplot_ROI_%d', j)));
+    close(gcf); clear gcf;
     % 
-    %     %Define Diastolic Region
-    %     figure; plot(flow_calc(j, :)); 
-    %     title(sprintf('%s: ROI %d - Diastole', plane, j)); xlabel('Time (ms)'); ylabel('Flow (mL/s)');
-    %     disp("Draw around the diastole portion of the flow curve")
-    %     flow_plot = gcf;
-    %     free = drawfreehand;
-    %     diastolePts = find(inpolygon(linspace(1,length(flow_calc(j, :)),length(flow_calc(j, :))),flow_calc(j, :),free.Position(:,1),free.Position(:,2)));
-    %     diastoleTimes = pcmrTimes_int(diastolePts);
-    %     delete(free); close(flow_plot); clear flow_plot;
-    %     EDV(j) = trapz(diastoleTimes*0.001, flow_calc(j, diastolePts));
-    % end
-    
-    %Define Linear QA Region (flow vs. area)
-    x = area(j, earlySystolePts);
-    y = flow_calc(j, earlySystolePts);
-    figure; scatter(x,y); 
-    title(sprintf('%s: ROI %d - QA Plot', plane, j)); xlabel('Area (mm^2)'); ylabel('Flow (mL/s)');
-    earlySystolePts2 = [x; y]';
-    [coef,stats] = polyfit(earlySystolePts2(:,1),earlySystolePts2(:,2),1);
-    
-    %Linear regression
-    minArea = min(earlySystolePts2(:,1));
-    maxArea = max(earlySystolePts2(:,1));
-    xq = linspace(minArea-0.1,maxArea+0.1,100);
-    yq = coef(1)*xq + coef(2); %y = mx+b
-    hold on; 
-    scatter(earlySystolePts2(:,1),earlySystolePts2(:,2),72,'k','x');
-    plot(xq,yq); 
-    str = [];
-    text(min(xq),max(yq)-0.1*max(yq),sprintf('Slope = %.4f \n Intcpt = %.4f', coef(1), coef(2)));
-    hold off;
-    QAplot = gcf; 
-    PWV(j) = coef(1); % m/s
-    fprintf('    ROI %d PWV_QA = %.4f m/s\n', j, PWV(j));
-    saveas(QAplot,fullfile(analysis_dir, sprintf('QAplot_ROI_%d', j)));
-    save(fullfile(analysis_dir, sprintf('coef_ROI_%d.mat', j)), 'coef');
-    save(fullfile(analysis_dir, sprintf('stats_ROI_%d.mat', j)), 'stats');
+    % % if sys_flag
+    % %     %Define Systolic Region
+    % %     figure; plot(flow_calc(j, :)); 
+    % %     title(sprintf('%s: ROI %d - Systole', plane, j)); xlabel('Time (ms)'); ylabel('Flow (mL/s)');
+    % %     disp("Draw around the systole portion of the flow curve")
+    % %     flow_plot = gcf;
+    % %     free = drawfreehand;
+    % %     systolePts = find(inpolygon(linspace(1,length(flow_calc(j, :)),length(flow_calc(j, :))),flow_calc(j, :),free.Position(:,1),free.Position(:,2)));
+    % %     systoleTimes = pcmrTimes_int(systolePts);
+    % %     delete(free); close(flow_plot); clear flow_plot;
+    % %     ESV(j) = trapz(systoleTimes*0.001, flow_calc(j, systolePts));
+    % % 
+    % %     %Define Diastolic Region
+    % %     figure; plot(flow_calc(j, :)); 
+    % %     title(sprintf('%s: ROI %d - Diastole', plane, j)); xlabel('Time (ms)'); ylabel('Flow (mL/s)');
+    % %     disp("Draw around the diastole portion of the flow curve")
+    % %     flow_plot = gcf;
+    % %     free = drawfreehand;
+    % %     diastolePts = find(inpolygon(linspace(1,length(flow_calc(j, :)),length(flow_calc(j, :))),flow_calc(j, :),free.Position(:,1),free.Position(:,2)));
+    % %     diastoleTimes = pcmrTimes_int(diastolePts);
+    % %     delete(free); close(flow_plot); clear flow_plot;
+    % %     EDV(j) = trapz(diastoleTimes*0.001, flow_calc(j, diastolePts));
+    % % end
+    % 
+    % %Define Linear QA Region (flow vs. area)
+    % x = area(j, earlySystolePts);
+    % y = flow_calc(j, earlySystolePts);
+    % figure; scatter(x,y); 
+    % title(sprintf('%s: ROI %d - QA Plot', plane, j)); xlabel('Area (mm^2)'); ylabel('Flow (mL/s)');
+    % earlySystolePts2 = [x; y]';
+    % [coef,stats] = polyfit(earlySystolePts2(:,1),earlySystolePts2(:,2),1);
+    % 
+    % %Linear regression
+    % minArea = min(earlySystolePts2(:,1));
+    % maxArea = max(earlySystolePts2(:,1));
+    % xq = linspace(minArea-0.1,maxArea+0.1,100);
+    % yq = coef(1)*xq + coef(2); %y = mx+b
+    % hold on; 
+    % scatter(earlySystolePts2(:,1),earlySystolePts2(:,2),72,'k','x');
+    % plot(xq,yq); 
+    % str = [];
+    % text(min(xq),max(yq)-0.1*max(yq),sprintf('Slope = %.4f \n Intcpt = %.4f', coef(1), coef(2)));
+    % hold off;
+    % QAplot = gcf; 
+    % PWV(j) = coef(1); % m/s
+    % fprintf('    ROI %d PWV_QA = %.4f m/s\n', j, PWV(j));
+    % saveas(QAplot,fullfile(analysis_dir, sprintf('QAplot_ROI_%d', j)));
+    % save(fullfile(analysis_dir, sprintf('coef_ROI_%d.mat', j)), 'coef');
+    % save(fullfile(analysis_dir, sprintf('stats_ROI_%d.mat', j)), 'stats');
 end
 
 % Initialize array for Excel file
 results = cell(num_roi+2, 6);
 results{1, 1} = 'ROI';
-results{1, 2} = 'PWV (m/s)';
-results{1, 3} = 'Mean Flow (mL/s)';
+% results{1, 2} = 'PWV (m/s)';
+results{1, 2} = 'Mean Flow (mL/s)';
+results{1, 3} = 'Net Flow (mL/s)';
 results{1, 4} = 'Min Flow (mL/s)';
 results{1, 5} = 'Max Flow (mL/s)';
 results{1, 6} = 'Peak Velocity (mm/s)';
 
 for j = 1:num_roi
     results{j+1, 1} = j;
-    results{j+1, 2} = PWV(j);
-    results{j+1, 3} = mean(flow_calc(j,:)); 
+    % results{j+1, 2} = PWV(j);
+    results{j+1, 2} = mean(flow_calc(j,:));
+    results{j+1, 3} = trapz(linspace(0, rrinterval, frames), flow_calc(j,:));
     results{j+1, 4} = min(flow_calc(j,:));
     results{j+1, 5} = max(flow_calc(j,:));
     results{j+1, 6} = max(vel_calc(j,:,3));
+    
+    fprintf('    ROI %d Mean Flow = %.4f mL/s \n', j, results{j+1, 2});
+    fprintf('    ROI %d Net Flow = %.4f mL/s \n', j, results{j+1, 3});
+    fprintf('    ROI %d Min Flow = %.4f mL/s \n', j, results{j+1, 4});
+    fprintf('    ROI %d Max Flow = %.4f mL/s \n', j, results{j+1, 5});
+    fprintf('    ROI %d Peak Velocity = %.4f mm/s \n', j, results{j+1, 6});
 end
+
 
 results2 = cell(frames+1,1+2*num_roi);
 results2{1, 1} = 'Time (ms)';
