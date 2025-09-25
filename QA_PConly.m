@@ -47,15 +47,20 @@ disp("Created analysis folder")
 
 %% Load 2DPC
 
-pc_data_folder = fullfile(result_dir, plane, 'pc');
-if ~exist(pc_data_folder,'dir')
-    mkdir(pc_data_folder);
-end
 disp("Loading 2DPC data...")
-if ~exist(fullfile(pc_data_folder, 'pc.mat'),'file')
-    disp("Select 2DPC scan folder")
-    pc_folder = uigetdir(pwd,'Select 2DPC scan folder');
-    dirFiles = dir(fullfile(pc_folder, '*.dcm'));
+disp("Select 2DPC scan folder")
+pc_folder = uigetdir(pwd,'Select 2DPC scan folder');
+dirFiles = dir(fullfile(pc_folder));
+pc_files = {dirFiles.name};
+
+if any(strcmp(pc_files, 'pcvipr_header.txt'))
+    data_type = 'radial';
+
+elseif any(endsWith(pc_files, '.dcm'))
+    data_type = 'dicom';
+end
+
+if strcmp(data_type, 'dicom')
     if isempty(dirFiles) %check if dicoms are zipped
         zipFiles = dir(fullfile(pc_folder, '*.tgz'));
         if isempty(zipFiles)
@@ -84,29 +89,49 @@ if ~exist(fullfile(pc_data_folder, 'pc.mat'),'file')
     pc = pcmr(:,:,1:pcFrames);
     mag = pcmr(:,:,(pcFrames+1):end);
     pcmrTimes = pcmrTimes(1:pcFrames);
-    save(fullfile(pc_data_folder, 'pc.mat'), 'pc');
-    save(fullfile(pc_data_folder, 'mag.mat'), 'mag');
-    save(fullfile(pc_data_folder, 'pcmrTimes.mat'), 'pcmrTimes');
-    save(fullfile(pc_data_folder, 'pcInfo.mat'), 'pcInfo');
-else
-    load(fullfile(pc_data_folder, 'pc.mat'));
-    load(fullfile(pc_data_folder, 'mag.mat'));
-    load(fullfile(pc_data_folder, 'pcmrTimes.mat'))
-    load(fullfile(pc_data_folder, 'pcInfo.mat'));
-    pixelArea = pcInfo.PixelSpacing(1).*pcInfo.PixelSpacing(2);
-    pcHeight = double(pcInfo.Height);
-    pcWidth = double(pcInfo.Width);
-    pcFrames = pcInfo.CardiacNumberOfImages;
-    pcHR = pcInfo.HeartRate; % bpm
+    MAG = mean(mag, 3);
+elseif strcmp(data_type, 'radial')
+    fid = fopen(fullfile(pcDir,'pcvipr_header.txt'), 'r'); %open header
+    dataArray = textscan(fid,'%s%s%[^\n\r]','Delimiter',' ', ...
+        'MultipleDelimsAsOne',true,'ReturnOnError',false); %parse header info
+    fclose(fid);
+    dataArray{1,2} = cellfun(@str2num,dataArray{1,2}(:),'UniformOutput',false);
+    pcviprHeader = cell2struct(dataArray{1,2}(:),dataArray{1,1}(:),1); %turn to structure
+    fovx = pcviprHeader.fovx;
+    fovy = pcviprHeader.fovy;
+    resx = pcviprHeader.matrixx; %resolution in x
+    resy = pcviprHeader.matrixy; %resolution in y
+    nframes = pcviprHeader.frames; %number of cardiac frames
+    timeres = pcviprHeader.timeres;
+    MAG = load_dat(fullfile(pcDir,'MAG.dat'),[resx resy]); %Average magnitude
+    CD = load_dat(fullfile(pcDir,'CD.dat'),[resx resy]); %Average complex difference
+    VZ = load_dat(fullfile(pcDir,'comp_vd_3.dat'),[resx resy]); %Average velocity
+
+    % Initialize data time-resolved data arrays
+    mag = zeros(resx,resy,nframes); %Time-resolved magnitude
+    cd = zeros(resx,resy,nframes); %Time-resolved complex difference
+    pc = zeros(resx,resy,nframes); %Time-resolved velocity 
+    for j = 1:nframes  %velocity is placed in v3 for 2D (through-plane)
+        mag(:,:,j) = load_dat(fullfile(pcDir,[filesep 'ph_' num2str(j-1,'%03i') '_mag.dat']),[resx resy]);
+        cd(:,:,j) = load_dat(fullfile(pcDir,[filesep 'ph_' num2str(j-1,'%03i') '_cd.dat']),[resx resy]);
+        pc(:,:,j) = load_dat(fullfile(pcDir,[filesep 'ph_' num2str(j-1,'%03i') '_vd_3.dat']),[resx resy]);
+    end
+  
+    MAG = flipud(MAG);
+    CD = flipud(CD);
+    VZ = flipud(VZ);
+    mag = flipud(mag);
+    cd = flipud(cd);
+    pc = flipud(pc); 
+    
+    pcHeight = resy;
+    pcWidth = resx;
+    pcFrames = nframes;
+    pixelArea = (fovx/resx) * (fovy/resy);
+    pcmrTimes = double(timeres.*(0:(nframes-1)));
+    pcHR = 60/(timeres*nframes)*1000; %bpm
 end
 
-scale = 2;
-pc = imresize(pc, scale);
-mag = imresize(mag, scale);
-pcHeight = pcHeight * scale;
-pcWidth = pcWidth * scale;
-pixelArea = pixelArea * scale * 2;
-tavg_magpc = mean(mag, 3);
 
 
 %% Initialize Masks
@@ -136,7 +161,7 @@ switch answer
 
     case 'No'
         % Zoom in Manually
-        figure; imshow(tavg_magpc,[]); title('Select region to zoom in on');
+        figure; imshow(MAG,[]); title('Select region to zoom in on');
         rect = drawrectangle;
         crop = round([rect.Position(2), rect.Position(2)+rect.Position(4), rect.Position(1), rect.Position(1)+rect.Position(3)]);
         save(fullfile(pc_data_folder, 'crop.mat'), 'crop')
@@ -161,77 +186,79 @@ if needsMask % if we haven't loaded in the mask...
         fprintf("Frame %d\n", i)
         image = mag(crop(1):crop(2),crop(3):crop(4),i);
         % image = rescale(image);
-        switch segType
-            case 'kmeans' % Kmeans Clustering
-                disp("ERROR! Not working at the moment. Please select a different method.")
-                return
-                % s = rng; rng('default');
-                % L = imsegkmeans(single(image),2,'NumAttempts',5);
-                % rng(s);
-                % labelOfInterest = L(round(size(image,1)/2),round(size(image,2)/2));
-                % BW = L == labelOfInterest;
-                % if sum(BW(:))==0
-                %     level = graythresh(image);
-                %     BW = imbinarize(image,level);
-                % end 
-            case 'otsu' % Otsu's Automatic Threshold
-                disp("ERROR! Not working at the moment. Please select a different method.")
-                return
-                % level = graythresh(image);
-                % BW = imbinarize(image,level);
-            case 'hough' % Hough Transform
-                [BW, centers, radii, radrange, sens] = circleFinder(image, num_roi, radrange, sens);
-            case 'hough+contours' % Hough Transform + Active Countours
-                [BW, centers, radii, radrange, sens] = circleFinder(image, num_roi, radrange, sens);
-                try
-                    BW = imdilate(BW,strel('disk',2)); %dilate so active contours pulls in segmentation
-                    iters = 300;
-                    smF = 5;
-                    contrF = 0.2; %bias towards shrinking
-                    method = 'Chan-Vese'; %or Chan-Vese (default)
-                    BW = activecontour(image,BW,iters,method,'SmoothFactor',smF,'ContractionBias',contrF);
-                    BW = imdilate(BW,strel('disk',1));
-                catch
-                    disp('Active contours failed, continuing with circle mask');
-                end
-            case 'edge+hough+contours' % Hough Transform + Active Countours
-                grad = rescale(imgradient(image));
-                [BW, centers, radii, radrange, sens] = circleFinder(image, num_roi, radrange, sens);
-                try
-                    BW = imerode(BW,strel('disk',2)); %erode so active contours pushes out
-                    iters = 300;
-                    smF = 5;
-                    contrF = -0.1; %bias towards growing
-                    method = 'Chan-Vese'; %or Chan-Vese (default)
-                    BW = activecontour(grad,BW,iters,method,'SmoothFactor',smF,'ContractionBias',contrF);
-                    BW = imdilate(BW,strel('disk',1));
-                catch
-                    disp('Active contours failed, continuing with circle mask');
-                end
-            case 'circle+contours'
-                f=figure; imshow(image,[]); 
-                circle = drawcircle();
-                radius = circle.Radius; %get radius of circle
-                center = round(circle.Center); %get center coordinates
-                close(f); delete(f);
-                [X,Y] = ndgrid(1:size(image,1),1:size(image,2));
-                X = X-center(2); %shift coordinate grid
-                Y = Y-center(1);
-                BW = sqrt(X.^2 + Y.^2)<=radius; %anything outside radius is ignored
-                try
-                    BW = imdilate(BW,strel('disk',2)); %dilate so active contours pulls in segmentation
-                    iters = 100;
-                    smF = 5;
-                    contrF = 0.1; %bias towards shrinking
-                    method = 'Chan-Vese'; %or Chan-Vese (default)
-                    BW = activecontour(image,BW,iters,method,'SmoothFactor',smF,'ContractionBias',contrF);
-                    BW = imdilate(BW,strel('disk',1));
-                catch
-                    disp('Active contours failed, continuing with circle mask');
-                end
-            otherwise
-                disp("Invalid segmentation choice!")
-                return
+        if i==currFrame
+            switch segType
+                case 'kmeans' % Kmeans Clustering
+                    disp("ERROR! Not working at the moment. Please select a different method.")
+                    return
+                    % s = rng; rng('default');
+                    % L = imsegkmeans(single(image),2,'NumAttempts',5);
+                    % rng(s);
+                    % labelOfInterest = L(round(size(image,1)/2),round(size(image,2)/2));
+                    % BW = L == labelOfInterest;
+                    % if sum(BW(:))==0
+                    %     level = graythresh(image);
+                    %     BW = imbinarize(image,level);
+                    % end 
+                case 'otsu' % Otsu's Automatic Threshold
+                    disp("ERROR! Not working at the moment. Please select a different method.")
+                    return
+                    % level = graythresh(image);
+                    % BW = imbinarize(image,level);
+                case 'hough' % Hough Transform
+                    [BW, centers, radii, radrange, sens] = circleFinder(image, num_roi, radrange, sens);
+                case 'hough+contours' % Hough Transform + Active Countours
+                    [BW, centers, radii, radrange, sens] = circleFinder(image, num_roi, radrange, sens);
+                    try
+                        BW = imdilate(BW,strel('disk',2)); %dilate so active contours pulls in segmentation
+                        iters = 300;
+                        smF = 5;
+                        contrF = 0.2; %bias towards shrinking
+                        method = 'Chan-Vese'; %or Chan-Vese (default)
+                        BW = activecontour(image,BW,iters,method,'SmoothFactor',smF,'ContractionBias',contrF);
+                        BW = imdilate(BW,strel('disk',1));
+                    catch
+                        disp('Active contours failed, continuing with circle mask');
+                    end
+                case 'edge+hough+contours' % Hough Transform + Active Countours
+                    grad = rescale(imgradient(image));
+                    [BW, centers, radii, radrange, sens] = circleFinder(image, num_roi, radrange, sens);
+                    try
+                        BW = imerode(BW,strel('disk',2)); %erode so active contours pushes out
+                        iters = 300;
+                        smF = 5;
+                        contrF = -0.1; %bias towards growing
+                        method = 'Chan-Vese'; %or Chan-Vese (default)
+                        BW = activecontour(grad,BW,iters,method,'SmoothFactor',smF,'ContractionBias',contrF);
+                        BW = imdilate(BW,strel('disk',1));
+                    catch
+                        disp('Active contours failed, continuing with circle mask');
+                    end
+                case 'circle+contours'
+                    f=figure; imshow(image,[]); 
+                    circle = drawcircle();
+                    radius = circle.Radius; %get radius of circle
+                    center = round(circle.Center); %get center coordinates
+                    close(f); delete(f);
+                    [X,Y] = ndgrid(1:size(image,1),1:size(image,2));
+                    X = X-center(2); %shift coordinate grid
+                    Y = Y-center(1);
+                    BW = sqrt(X.^2 + Y.^2)<=radius; %anything outside radius is ignored
+                    try
+                        BW = imdilate(BW,strel('disk',2)); %dilate so active contours pulls in segmentation
+                        iters = 100;
+                        smF = 5;
+                        contrF = 0.1; %bias towards shrinking
+                        method = 'Chan-Vese'; %or Chan-Vese (default)
+                        BW = activecontour(image,BW,iters,method,'SmoothFactor',smF,'ContractionBias',contrF);
+                        BW = imdilate(BW,strel('disk',1));
+                    catch
+                        disp('Active contours failed, continuing with circle mask');
+                    end
+                otherwise
+                    disp("Invalid segmentation choice!")
+                    return
+            end
         end
 
         % Freehand ROI conversion
@@ -317,7 +344,7 @@ for j=1:num_roi
         flow(j, i) = area(j, i).*vMean.*0.001; %flow in frame i (mL/s)
     end
 end
-save(fullfile(pc_data_folder, 'flows.mat'), 'flow');
+save(fullfile(analysis_dir, 'flows.mat'), 'flow');
 disp('Flow data saved')
 %     case "Cancel"
 %         return
@@ -430,11 +457,13 @@ for i=1:pcFrames
     results2{i+1, 1} = pcmrTimes(i);
 end
 for j = 1:num_roi
-    results2{1, 2*j} = sprintf('ROI%d Area (mm^2)', j);
-    results2{1, 2*j+1} = sprintf('ROI%d Flow (mL/s)', j);
+    results2{1, 2*j} = sprintf('ROI%d Flow (mL/s)', j);
+    results2{1, 2*j+1} = sprintf('ROI%d Area (mm^2)', j);
+    results2{1, 2*j+2} = sprintf('ROI%d Diameter (mm)', j);
     for i = 1:pcFrames
-        results2{i+1, 2*j} = area(j, i);
-        results2{i+1, 2*j+1} = flow(j, i);
+        results2{i+1, 2*j} = flow(j, i);
+        results2{i+1, 2*j+1} = area(j, i);
+        results2{i+1, 2*j+2} = 2*sqrt(area(j, i)/pi);
     end
 end
 
@@ -458,7 +487,7 @@ function [BW, centers, radii, radrange, sens] = circleFinder(image, num_roi, rad
             try
                 BW = BW | (hypot(Xgrid-centers(n,1),Ygrid-centers(n,2)) <= radii(n));
             catch error
-                
+                disp(error)
             end
         end
         viscircles(centers, radii);
