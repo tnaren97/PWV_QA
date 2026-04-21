@@ -337,8 +337,8 @@ for j = 1:num_roi
     end
 end
 
-writecell(results, fullfile(analysis_dir, 'results.xlsx'))
-writecell(results2, fullfile(analysis_dir, 'results.xlsx'), 'WriteMode', 'append')
+writecell(results, fullfile(analysis_dir, sprintf('results_%s.xlsx', date)))
+writecell(results2, fullfile(analysis_dir,  sprintf('results_%s.xlsx', date)), 'WriteMode', 'append')
 fprintf("( つ ◕_◕ )つ Segmentation Data Saved to %s!\n", fullfile('2DSegmentationAnalysis', plane, strcat(segType, '_', date)))
 
 
